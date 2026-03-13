@@ -1,0 +1,42 @@
+# ===== Android/Gradle =====
+*.iml
+.gradle
+/local.properties
+/.idea/caches
+/.idea/libraries
+/.idea/modules.xml
+/.idea/workspace.xml
+/.idea/navEditor.xml
+/.idea/assetWizardSettings.xml
+.DS_Store
+/build
+/captures
+.externalNativeBuild
+.cxx
+local.properties
+
+# ===== IDE =====
+/.idea/shelf/
+/.idea/sonarlint/
+/.idea/statistic/
+/.idea/dictionaries/
+*.iws
+*.ipr
+
+# ===== OS =====
+Thumbs.db
+*.swp
+*.swo
+*~
+
+# ===== Logs =====
+*.log
+
+# ===== NDK/CMake =====
+/.externalNativeBuild
+/app/.cxx/
+/app/build/
+
+# ===== Signing =====
+*.jks
+*.keystore
