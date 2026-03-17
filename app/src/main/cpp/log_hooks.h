@@ -21,12 +21,11 @@ enum AllocType {
     TYPE_FREE = 4,
     TYPE_MMAP = 5,
     TYPE_MUNMAP = 6,
-    TYPE_MMAP64 = 7,          // 新增
-    TYPE_POSIX_MEMALIGN = 8,  // 新增
-    TYPE_ALIGNED_ALLOC = 9     // 新增
+    TYPE_MMAP64 = 7,
+    TYPE_POSIX_MEMALIGN = 8,
+    TYPE_ALIGNED_ALLOC = 9
 };
 
-// 获取调用栈（简化版，取多层返回地址）
 struct BacktraceState {
     void** current;
     void** end;
