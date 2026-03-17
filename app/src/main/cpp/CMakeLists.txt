@@ -48,3 +48,15 @@ target_link_libraries(${CMAKE_PROJECT_NAME}
 # so2: Hook 内存检测库
 add_library(so2 SHARED so2-hook.cpp log_buffer.cpp log_hooks.cpp)
 target_link_libraries(so2 bytehook::bytehook log atomic)
+
+# ========================================
+# ELF Reader - 用于学习 ELF 结构和 so 跳转机制
+# ========================================
+# 添加子目录，编译 elf_reader
+# 默认编译成静态库（可被 so2 链接）和独立可执行文件
+set(BUILD_ELF_READER_STATIC ON)
+set(BUILD_ELF_READER_BINARY ON)
+add_subdirectory(elf_reader)
+
+# 将 elf_reader 静态库链接到 so2（后续步骤需要时启用）
+# target_link_libraries(so2 elf_reader_static)
