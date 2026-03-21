@@ -8,6 +8,13 @@ set(ELF_READER_SOURCES
     elf_sections.cpp
     elf_symbols.cpp
     elf_relocations.cpp
+    elf_options.cpp
+    elf_plt.cpp
+    elf_dynamic.cpp
+    elf_segments.cpp
+    elf_ehframe.cpp
+    elf_rodata.cpp
+    elf_dwarf.cpp
 )
 
 # ========================================

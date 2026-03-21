@@ -11,12 +11,16 @@ void OptionParser::printUsage(const char* program) {
     printf("\n");
     printf("显示 ELF 格式文件的信息\n");
     printf("\n");
-    printf("  %-20s %s\n", "-a --all", "显示所有信息（等价于 -h -S -s -r -d -D）");
+    printf("  %-20s %s\n", "-a --all", "显示所有信息（等价于 -h -S -s -r -d -D -l）");
     printf("  %-20s %s\n", "-h --file-header", "显示 ELF 文件头");
     printf("  %-20s %s\n", "-S --sections", "显示节头表（section headers）");
+    printf("  %-20s %s\n", "-l --segments", "显示程序头表（program headers / segments）");
     printf("  %-20s %s\n", "-s --syms", "显示符号表（symbol table）");
     printf("  %-20s %s\n", "-r --relocs", "显示重定位信息（relocation）");
     printf("  %-20s %s\n", "-d --dynamic", "显示动态段信息（dynamic section）");
+    printf("  %-20s %s\n", "-f --eh-frame", "显示 .eh_frame 异常处理帧");
+    printf("  %-20s %s\n", "-R --rodata", "显示 .rodata 字符串常量");
+    printf("  %-20s %s\n", "-g --debug-line", "显示 DWARF 行号信息 (.debug_line)");
     printf("  %-20s %s\n", "-D --disassemble", "反汇编 PLT（过程链接表）");
     printf("  %-20s %s\n", "-W --wide", "宽格式输出，不截断行");
     printf("  %-20s %s\n", "-H --help", "显示此帮助信息");
@@ -104,11 +108,23 @@ bool OptionParser::parseShortOption(const char* opt, ReadelfOptions& options) {
             case 's':
                 options.showSymbols = true;
                 break;
+            case 'l':
+                options.showSegments = true;
+                break;
             case 'r':
                 options.showRelocs = true;
                 break;
             case 'd':
                 options.showDynamic = true;
+                break;
+            case 'f':
+                options.showEHFrame = true;
+                break;
+            case 'R':
+                options.showRodata = true;
+                break;
+            case 'g':
+                options.showDebugLine = true;
                 break;
             case 'D':
                 options.disassemble = true;
@@ -145,12 +161,20 @@ bool OptionParser::parseLongOption(const char* opt, ReadelfOptions& options) {
         options.showFileHeader = true;
     } else if (strcmp(name, "sections") == 0 || strcmp(name, "section-headers") == 0) {
         options.showSectionHeaders = true;
+    } else if (strcmp(name, "segments") == 0) {
+        options.showSegments = true;
     } else if (strcmp(name, "syms") == 0 || strcmp(name, "symbols") == 0) {
         options.showSymbols = true;
     } else if (strcmp(name, "relocs") == 0) {
         options.showRelocs = true;
     } else if (strcmp(name, "dynamic") == 0) {
         options.showDynamic = true;
+    } else if (strcmp(name, "eh-frame") == 0) {
+        options.showEHFrame = true;
+    } else if (strcmp(name, "rodata") == 0) {
+        options.showRodata = true;
+    } else if (strcmp(name, "debug-line") == 0) {
+        options.showDebugLine = true;
     } else if (strcmp(name, "disassemble") == 0) {
         options.disassemble = true;
     } else if (strcmp(name, "wide") == 0) {

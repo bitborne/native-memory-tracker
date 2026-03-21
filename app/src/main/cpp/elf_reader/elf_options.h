@@ -18,6 +18,10 @@ struct ReadelfOptions {
     bool showSymbols = false;         // -s, --syms, --symbols
     bool showRelocs = false;          // -r, --relocs
     bool showDynamic = false;         // -d, --dynamic
+    bool showSegments = false;        // -l, --segments (Program Headers)
+    bool showEHFrame = false;         // -f, --eh-frame
+    bool showRodata = false;          // -R, --rodata
+    bool showDebugLine = false;       // -g, --debug-line (DWARF .debug_line)
     bool disassemble = false;         // -D, --disassemble (PLT)
     bool showAll = false;             // -a, --all
 
@@ -32,17 +36,21 @@ struct ReadelfOptions {
 
     // 检查是否有任何显示选项被设置
     bool hasDisplayOption() const {
-        return showFileHeader || showSectionHeaders || showSymbols ||
-               showRelocs || showDynamic || disassemble || showAll;
+        return showFileHeader || showSectionHeaders || showSegments || showSymbols ||
+               showRelocs || showDynamic || showEHFrame || showRodata || showDebugLine || disassemble || showAll;
     }
 
     // 应用 -a (--all) 选项：设置所有显示标志
     void applyAll() {
         showFileHeader = true;
         showSectionHeaders = true;
+        showSegments = true;
         showSymbols = true;
         showRelocs = true;
         showDynamic = true;
+        showEHFrame = true;
+        showRodata = true;
+        showDebugLine = true;
         disassemble = true;
     }
 };
