@@ -11,6 +11,14 @@
 bool SectionHeaderTable::parse(const uint8_t* data, size_t size,
                                uint64_t shoff, uint16_t shnum, uint16_t shentsize,
                                uint16_t shstrndx, bool is64bit, bool isLittleEndian) {
+
+    /* 目前已知:
+        e_shoff: 节头表在文件中的偏移
+        e_shnum: 节条目数
+        e_shentsize: 每一个节头的大小 `Size of section headers: 64 (bytes)`
+        e_shstrndx: section 名称字符串表在节头表中的偏移
+    */
+
     is64bit_ = is64bit;
     isLittleEndian_ = isLittleEndian;
 
@@ -26,6 +34,7 @@ bool SectionHeaderTable::parse(const uint8_t* data, size_t size,
         return false;
     }
 
+    // 避免填充时扩容
     sections.reserve(shnum);
 
     // 第一遍：解析所有section header（此时还不知道名称）
@@ -34,7 +43,7 @@ bool SectionHeaderTable::parse(const uint8_t* data, size_t size,
 
         SectionInfo sec;
         sec.index = i;
-
+         // 每个header总共十个字段, 本次循环全部填入
         if (is64bit) {
             sec.type = readVal<uint32_t>(shdr + 4, isLittleEndian);
             sec.flags = readVal<uint64_t>(shdr + 8, isLittleEndian);
@@ -47,7 +56,8 @@ bool SectionHeaderTable::parse(const uint8_t* data, size_t size,
             sec.entsize = readVal<uint64_t>(shdr + 56, isLittleEndian);
             // 名称偏移最后保存
             uint32_t nameOffset = readVal<uint32_t>(shdr + 0, isLittleEndian);
-            // 暂时保存名称偏移，后面解析
+            // 各个sec的name,先存的是nameOffset: 在section名称字符串表中的偏移
+            // 后面会解析成真名(.dynsym .rela.plt .dynstr 等)
             sec.name = std::to_string(nameOffset);  // 临时存储偏移值
         } else {
             uint32_t nameOffset = readVal<uint32_t>(shdr + 0, isLittleEndian);
@@ -63,10 +73,11 @@ bool SectionHeaderTable::parse(const uint8_t* data, size_t size,
             sec.name = std::to_string(nameOffset);
         }
 
+        // 将填好的单子上交保存
         sections.push_back(sec);
     }
 
-    // section名称字符串表索引
+    // 找到 section 名称字符串表的位置(shstrndx 是 ELF header 传进来的)
     if (shstrndx != 0 && shstrndx < shnum) {
         shstrtabSection = &sections[shstrndx];
         // 加载字符串表数据
@@ -75,7 +86,7 @@ bool SectionHeaderTable::parse(const uint8_t* data, size_t size,
         }
     }
 
-    // 第二遍：解析section名称并识别关键section
+    // 第二遍(非必须)：解析section名称并识别关键section
     for (auto& sec : sections) {
         // 解析名称
         if (!shstrtabData_.empty()) {
@@ -86,7 +97,7 @@ bool SectionHeaderTable::parse(const uint8_t* data, size_t size,
 
         // 识别关键section
         if (sec.name == ".shstrtab") {
-            // section名称字符串表已在上面处理
+            // section名称字符串表已在上面处理(位置:第一遍解析结束后,加载section名称字符串表内容前)
         } else if (sec.name == ".dynstr") {
             dynstrSection = &sec;
         } else if (sec.name == ".dynsym") {
@@ -112,15 +123,22 @@ bool SectionHeaderTable::parse(const uint8_t* data, size_t size,
 }
 
 bool SectionHeaderTable::loadShstrtab(const uint8_t* data, size_t size) {
+    // data: mmap 起点地址
+    // size: 文件大小
+
+    // 参数合法性验证
     if (!shstrtabSection || shstrtabSection->offset == 0 || shstrtabSection->size == 0) {
         return false;
     }
 
+    // 还是合不合法的验证, 不能超出文件大小了
     if (shstrtabSection->offset + shstrtabSection->size > size) {
         fprintf(stderr, "Error: Section name string table extends beyond file\n");
         return false;
     }
 
+    // 这里的 ->size 指的是整个 字符串表这个section 的大小
+    // shstrtabData_ 是一个字节数组, 存储整个 section 的数据, 而非单个header条目的数据
     shstrtabData_.resize(shstrtabSection->size);
     memcpy(shstrtabData_.data(), data + shstrtabSection->offset, shstrtabSection->size);
     return true;
