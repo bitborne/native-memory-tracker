@@ -8,9 +8,11 @@
 // ========================================
 
 bool RelocationTable::parse(const uint8_t* data, size_t size,
-                            bool is64bit, bool isLittleEndian, bool isPLT) {
+                            bool is64bit, bool isLittleEndian, bool isPLT,
+                            uint32_t machine) {
     is64bit_ = is64bit;
     isLittleEndian_ = isLittleEndian;
+    machine_ = machine;
     this->isPLT = isPLT;
 
     if (!data || size == 0) {
@@ -99,7 +101,19 @@ uint32_t RelocationTable::getGOTIndex(const RelocationInfo* rel, uint64_t gotSta
     return static_cast<uint32_t>((offset - gotStart) / 8);
 }
 
-const char* RelocationTable::getTypeName(uint32_t type) {
+// 获取重定位类型名称（根据 machine 类型自动选择）
+const char* RelocationTable::getTypeName(uint32_t type) const {
+    if (machine_ == 183) {  // EM_AARCH64
+        return getTypeNameAArch64(type);
+    } else if (machine_ == 62) {  // EM_X86_64
+        return getTypeNameX86_64(type);
+    }
+    // 默认使用 AARCH64 类型名
+    return getTypeNameAArch64(type);
+}
+
+// 获取 ARM64 重定位类型名称
+const char* RelocationTable::getTypeNameAArch64(uint32_t type) {
     switch (type) {
         case R_AARCH64_NONE:         return "R_AARCH64_NONE";
         case R_AARCH64_ABS64:        return "R_AARCH64_ABS64";
@@ -119,19 +133,56 @@ const char* RelocationTable::getTypeName(uint32_t type) {
     }
 }
 
-bool RelocationTable::isPLTReloc(uint32_t type) {
-    return type == R_AARCH64_JUMP_SLOT;
+// 获取 x86_64 重定位类型名称
+const char* RelocationTable::getTypeNameX86_64(uint32_t type) {
+    switch (type) {
+        case R_X86_64_NONE:          return "R_X86_64_NONE";
+        case R_X86_64_64:            return "R_X86_64_64";
+        case R_X86_64_PC32:          return "R_X86_64_PC32";
+        case R_X86_64_GOT32:         return "R_X86_64_GOT32";
+        case R_X86_64_PLT32:         return "R_X86_64_PLT32";
+        case R_X86_64_COPY:          return "R_X86_64_COPY";
+        case R_X86_64_GLOB_DAT:      return "R_X86_64_GLOB_DAT";
+        case R_X86_64_JUMP_SLOT:     return "R_X86_64_JUMP_SLOT";
+        case R_X86_64_RELATIVE:      return "R_X86_64_RELATIVE";
+        case R_X86_64_GOTPCREL:      return "R_X86_64_GOTPCREL";
+        case R_X86_64_32:            return "R_X86_64_32";
+        case R_X86_64_32S:           return "R_X86_64_32S";
+        case R_X86_64_16:            return "R_X86_64_16";
+        case R_X86_64_PC16:          return "R_X86_64_PC16";
+        case R_X86_64_8:             return "R_X86_64_8";
+        case R_X86_64_PC8:           return "R_X86_64_PC8";
+        case R_X86_64_DTPMOD64:      return "R_X86_64_DTPMOD64";
+        case R_X86_64_DTPOFF64:      return "R_X86_64_DTPOFF64";
+        case R_X86_64_TPOFF64:       return "R_X86_64_TPOFF64";
+        case R_X86_64_IRELATIVE:     return "R_X86_64_IRELATIVE";
+        default: {
+            static char buf[32];
+            snprintf(buf, sizeof(buf), "UNKNOWN(%u)", type);
+            return buf;
+        }
+    }
+}
+
+bool RelocationTable::isPLTReloc(uint32_t type, uint32_t machine) {
+    if (machine == 183) {  // EM_AARCH64
+        return type == R_AARCH64_JUMP_SLOT;
+    } else if (machine == 62) {  // EM_X86_64
+        return type == R_X86_64_JUMP_SLOT;
+    }
+    // 默认支持两种类型
+    return type == R_AARCH64_JUMP_SLOT || type == R_X86_64_JUMP_SLOT;
 }
 
 void RelocationTable::printRelocations() const {
     printf("\nRelocation table (%s):\n", isPLT ? ".rela.plt" : ".rela.dyn");
-    printf("  Offset          Info           Type           Sym. Value    Sym. Name\n");
+    printf("  Offset          Info           Type                 Sym. Value    Sym. Name\n");
 
     for (const auto& rel : relocations) {
         const char* symName = rel.symbol ? rel.symbol->name.c_str() : "???";
         uint64_t symValue = rel.symbol ? rel.symbol->value : 0;
 
-        printf("%016lx  %016lx %-14s %016lx %s\n",
+        printf("%016lx  %016lx %-20s %016lx %s\n",
                (unsigned long)rel.offset,
                (unsigned long)rel.info,
                getTypeName(rel.type),
