@@ -78,6 +78,7 @@ enum ElfType : uint16_t {
 // ========================================
 // ELF Header (32-bit)
 // ========================================
+// sizeof(Elf32_Ehdr) == 52
 struct Elf32_Ehdr {
     uint8_t  e_ident[EI_NIDENT];  // Magic + 文件信息
     uint16_t e_type;              // 文件类型
@@ -93,11 +94,12 @@ struct Elf32_Ehdr {
     uint16_t e_shentsize;         // Section header 条目大小
     uint16_t e_shnum;             // Section header 条目数量
     uint16_t e_shstrndx;          // 字符串表 section 索引
-};
+};   // 仅仅用于 计算/验证 sizeof(Elf32_Ehdr)
 
 // ========================================
 // ELF Header (64-bit)
 // ========================================
+// sizeof(Elf64_Ehdr) == 64
 struct Elf64_Ehdr {
     uint8_t  e_ident[EI_NIDENT];
     uint16_t e_type;
@@ -113,7 +115,7 @@ struct Elf64_Ehdr {
     uint16_t e_shentsize;
     uint16_t e_shnum;
     uint16_t e_shstrndx;
-};
+}; // 仅仅用于 计算/验证 sizeof(Elf64_Ehdr)
 
 // ========================================
 // 通用封装类
@@ -124,27 +126,27 @@ public:
     bool isLittleEndian = true;
 
     // e_ident 解析后的字段
-    uint8_t ei_class = 0;
-    uint8_t ei_data = 0;
-    uint8_t ei_version = 0;
-    uint8_t ei_osabi = 0;
+    uint8_t ei_class = 0;       // 64 or 32
+    uint8_t ei_data = 0;        // 大小端
+    uint8_t ei_version = 0;     // elf 版本号, 和下文的 e_version 必须一致 == 0x1
+    uint8_t ei_osabi = 0;       // OS ABI: systemV / Linux
 
     // 基本元数据
-    uint16_t e_type = 0;
-    uint16_t e_machine = 0;
-    uint32_t e_version = 0;
-    uint64_t e_entry = 0;
+    uint16_t e_type = 0;   // 文件类型 REL (.o, .a), EXEC (.out), DYN (.so), CORE (CoreDump)
+    uint16_t e_machine = 0;    // x86  ARM  x86_64  ARM64
+    uint32_t e_version = 0;     // 版本
+    uint64_t e_entry = 0;       // 入口点地址
     uint32_t e_flags = 0;     // 处理器特定标志
 
     // Header 位置和大小
-    uint64_t e_phoff = 0;     // Program header 文件偏移
-    uint64_t e_shoff = 0;     // Section header 文件偏移
-    uint16_t e_ehsize = 0;
-    uint16_t e_phentsize = 0;
-    uint16_t e_phnum = 0;
-    uint16_t e_shentsize = 0;
-    uint16_t e_shnum = 0;
-    uint16_t e_shstrndx = 0;  // Section 名称字符串表索引
+    uint64_t e_phoff = 0;       // Program header 文件偏移
+    uint64_t e_shoff = 0;       // Section header 文件偏移
+    uint16_t e_ehsize = 0;      // ELF header 大小
+    uint16_t e_phentsize = 0;   // Program header 条目大小
+    uint16_t e_phnum = 0;       // Program header 条目数量
+    uint16_t e_shentsize = 0;   // Section header 条目大小
+    uint16_t e_shnum = 0;       // Section header 条目数量
+    uint16_t e_shstrndx = 0;    // Section 名称字符串表索引
 
 public:
     // 从文件缓冲区解析

@@ -6,6 +6,8 @@ cmake_minimum_required(VERSION 3.22.1)
 set(ELF_READER_SOURCES
     elf_types.cpp
     elf_sections.cpp
+    elf_symbols.cpp
+    elf_relocations.cpp
 )
 
 # ========================================

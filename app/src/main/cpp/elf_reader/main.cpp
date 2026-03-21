@@ -2,6 +2,8 @@
 
 #include "elf_types.h"
 #include "elf_sections.h"
+#include "elf_symbols.h"
+#include "elf_relocations.h"
 #include <cstdio>
 #include <cstdlib>
 #include <fcntl.h>
@@ -110,6 +112,39 @@ int main(int argc, char* argv[]) {
 
     sections.printSections();
     sections.printKeySections();
+
+    // ==============================
+    // 步骤 3: 解析动态符号表 (.dynsym)
+    // ==============================
+    DynamicSymbolTable symtab;
+    if (sections.dynsymSection && sections.dynstrSection) {
+        const uint8_t* dynsymData = sections.getSectionData(sections.dynsymSection, fileData);
+        const uint8_t* dynstrData = sections.getSectionData(sections.dynstrSection, fileData);
+
+        if (dynsymData && dynstrData) {
+            if (symtab.parse(dynsymData, sections.dynsymSection->size,
+                             dynstrData, sections.dynstrSection->size,
+                             header.is64bit, header.isLittleEndian)) {
+                symtab.printFunctions();
+            }
+        }
+    }
+
+    // ==============================
+    // 步骤 4: 解析重定位表 (.rela.plt)
+    // ==============================
+    RelocationTable relocs;
+    if (sections.relaPltSection) {
+        const uint8_t* relaData = sections.getSectionData(sections.relaPltSection, fileData);
+        if (relaData) {
+            if (relocs.parse(relaData, sections.relaPltSection->size,
+                             header.is64bit, header.isLittleEndian, true)) {
+                // 关联符号表
+                relocs.linkSymbols(symtab);
+                relocs.printPLTRelocations();
+            }
+        }
+    }
 
     // 清理
     unmapFile(fileData, fileSize);
