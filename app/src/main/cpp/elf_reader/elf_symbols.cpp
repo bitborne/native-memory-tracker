@@ -159,8 +159,8 @@ const char* DynamicSymbolTable::getShndxName(uint16_t shndx) {
     }
 }
 
-void DynamicSymbolTable::printSymbols() const {
-    printf("\nDynamic symbol table (.dynsym):\n");
+void DynamicSymbolTable::printSymbols(const char* title) const {
+    printf("\nSymbol table (%s):\n", title);
     printf("   Num:    Value          Size Type    Bind   Vis      Ndx Name\n");
 
     for (const auto& sym : symbols) {

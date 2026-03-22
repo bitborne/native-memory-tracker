@@ -126,6 +126,7 @@ public:
     const SectionInfo* dynamicSection = nullptr;   // .dynamic
     const SectionInfo* hashSection = nullptr;      // .hash
     const SectionInfo* gnuHashSection = nullptr;   // .gnu.hash
+    const SectionInfo* symtabSection = nullptr;    // .symtab（完整符号表）
 
 private:
     bool is64bit_ = false;
