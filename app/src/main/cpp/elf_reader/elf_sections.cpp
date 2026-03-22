@@ -116,6 +116,8 @@ bool SectionHeaderTable::parse(const uint8_t* data, size_t size,
             hashSection = &sec;
         } else if (sec.name == ".gnu.hash") {
             gnuHashSection = &sec;
+        } else if (sec.name == ".symtab") {
+            symtabSection = &sec;
         }
     }
 

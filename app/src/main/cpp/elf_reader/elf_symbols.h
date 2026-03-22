@@ -131,8 +131,8 @@ public:
     // 获取符号名（从 dynstr）
     const char* getSymbolName(uint32_t nameOffset) const;
 
-    // 打印所有符号（类似 readelf --dyn-syms）
-    void printSymbols() const;
+    // 打印所有符号（类似 readelf --dyn-syms），title 为表名标题
+    void printSymbols(const char* title = ".dynsym") const;
 
     // 打印函数符号（仅 STT_FUNC）
     void printFunctions() const;

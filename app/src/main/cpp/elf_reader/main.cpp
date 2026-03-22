@@ -150,7 +150,36 @@ static bool processFile(const char* path, const ReadelfOptions& options) {
         if (symtab.symbols.empty()) {
             printf("此文件没有动态符号表 (.dynsym)\n\n");
         } else {
-            symtab.printSymbols();
+            symtab.printSymbols(".dynsym");
+        }
+    }
+
+    // ==============================
+    // 步骤 3b: 解析完整符号表 (.symtab)
+    // ==============================
+    DynamicSymbolTable staticSymtab;
+    if (sections.symtabSection) {
+        // .symtab 的关联字符串表由 sh_link 字段指定
+        uint32_t strtabIdx = sections.symtabSection->link;
+        const SectionInfo* strtabSec = (strtabIdx < sections.sections.size())
+                                       ? &sections.sections[strtabIdx] : nullptr;
+
+        const uint8_t* symtabData = sections.getSectionData(sections.symtabSection, fileData);
+        const uint8_t* strtabData = strtabSec ? sections.getSectionData(strtabSec, fileData) : nullptr;
+        size_t strtabSize = strtabSec ? strtabSec->size : 0;
+
+        if (symtabData && strtabData) {
+            staticSymtab.parse(symtabData, sections.symtabSection->size,
+                               strtabData, strtabSize,
+                               header.is64bit, header.isLittleEndian);
+        }
+    }
+
+    if (options.showSymbols) {
+        if (staticSymtab.symbols.empty()) {
+            printf("此文件没有完整符号表 (.symtab)（发布版 so 通常已裁剪）\n\n");
+        } else {
+            staticSymtab.printSymbols(".symtab");
         }
     }
 
