@@ -1,5 +1,6 @@
 #include "log_buffer.h"
 #include "log_hooks.h"
+#include "idle_page_monitor.h"
 
 #include <jni.h>
 #include <fcntl.h>
@@ -73,6 +74,27 @@ Java_com_example_demo_1so_MainActivity_nativeInitHook(JNIEnv* env, jobject thiz,
     g_stub_aligned_alloc = bytehook_hook_single(target_so, nullptr, "aligned_alloc", (void*)my_aligned_alloc, nullptr, nullptr);
 
     LOGI("SO2 Hook initialized, logging to: %s", path);
+    g_hooked = true;
+
+    // 初始化 Idle Page Monitor（内存访问监控）
+    // mem_visit.log 路径与 mem_reg.log 同目录
+    char visit_log_path[512];
+    const char* last_slash = strrchr(path, '/');
+    if (last_slash) {
+        int dir_len = last_slash - path + 1;
+        snprintf(visit_log_path, sizeof(visit_log_path), "%.*s%s",
+                 dir_len, path, "mem_visit.log");
+    } else {
+        snprintf(visit_log_path, sizeof(visit_log_path), "mem_visit.log");
+    }
+
+
+    // 100ms 初始周期，自动调整
+    if (idle_page::IdlePageMonitor::instance().init("libdemo_so.so", visit_log_path, 100)) {
+        LOGI("IdlePageMonitor initialized: %s", visit_log_path);
+    } else {
+        LOGI("IdlePageMonitor init failed (may need root)");
+    }
 }
 
 // 关闭日志（可选）
@@ -111,6 +133,23 @@ Java_com_example_demo_1so_MainActivity_nativeCloseLog(JNIEnv* env, jobject thiz)
         g_log_fd = -1;
     }
     
+    // 关闭 Idle Page Monitor
+    idle_page::IdlePageMonitor::instance().shutdown();
+
     g_hooked = false;
     LOGI("Hook closed and unhooked");
+}
+
+// ==================== Idle Page Monitor 控制 ====================
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_example_demo_1so_MainActivity_nativeStartIdleMonitor(JNIEnv* env, jobject thiz) {
+    LOGI("Starting Idle Page Monitor...");
+    idle_page::IdlePageMonitor::instance().start();
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_example_demo_1so_MainActivity_nativeStopIdleMonitor(JNIEnv* env, jobject thiz) {
+    LOGI("Stopping Idle Page Monitor...");
+    idle_page::IdlePageMonitor::instance().stop();
 }
