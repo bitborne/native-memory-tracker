@@ -29,6 +29,10 @@ public class MainActivity extends AppCompatActivity {
     public native void nativeInitHook(String logPath);
     public native void nativeCloseLog();
 
+    // Idle Page Monitor 控制
+    public native void nativeStartIdleMonitor();
+    public native void nativeStopIdleMonitor();
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -53,14 +57,17 @@ public class MainActivity extends AppCompatActivity {
     private void toggleSimulation() {
         if (!isRunning) {
             nativeStartSimulation();
+            nativeStartIdleMonitor();  // 启动 Idle Page 监控
             tvStatus.setText("运行中...\n\n" +
                     "L1-HOT: 渲染缓冲(永不释放)\n" +
                     "L2-WARM: 对象池(高频分配/释放)\n" +
                     "L3-COOL: 配置缓存(5秒清理)\n" +
-                    "L4-COLD: 资源包(mmap 30秒)");
+                    "L4-COLD: 资源包(mmap 30秒)\n\n" +
+                    "IdlePage: 监控中(10ms-1s自适应)");
             btnToggle.setText("停止模拟");
             isRunning = true;
         } else {
+            nativeStopIdleMonitor();  // 停止 Idle Page 监控
             nativeStopSimulation();
             nativeCloseLog();  // 停止后立即关闭日志，确保数据写入
             tvStatus.setText("已停止");
@@ -72,6 +79,7 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onDestroy() {
         if (isRunning) {
+            nativeStopIdleMonitor();  // 确保停止 Idle Page 监控
             nativeStopSimulation();
         }
         nativeCloseLog();  // 关闭日志
