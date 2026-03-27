@@ -53,7 +53,6 @@ Java_com_example_demo_1so_MainActivity_nativeInitHook(JNIEnv* env, jobject thiz,
     }
 
     LOGI("SO2: Log file opened, fd=%d", g_log_fd);
-    env->ReleaseStringUTFChars(log_path, path);
 
     // 初始化 ByteHook（自动模式 + 开启调试日志）
     int ret = bytehook_init(BYTEHOOK_MODE_AUTOMATIC, true);
@@ -93,8 +92,11 @@ Java_com_example_demo_1so_MainActivity_nativeInitHook(JNIEnv* env, jobject thiz,
     if (idle_page::IdlePageMonitor::instance().init("libdemo_so.so", visit_log_path, 100)) {
         LOGI("IdlePageMonitor initialized: %s", visit_log_path);
     } else {
-        LOGI("IdlePageMonitor init failed (may need root)");
+        LOGE("IdlePageMonitor init failed (may need root)");
     }
+
+    // 释放 JNI 字符串
+    env->ReleaseStringUTFChars(log_path, path);
 }
 
 // 关闭日志（可选）
