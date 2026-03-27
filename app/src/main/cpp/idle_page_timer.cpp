@@ -110,13 +110,13 @@ void IdlePageTimer::set_rate(SampleRate rate) {
 
     switch (rate) {
         case SampleRate::SLOW:
-            new_interval = 1000;  // 1秒 - 检测冷数据
+            new_interval = 2000;  // 2秒 - 检测冷数据
             break;
         case SampleRate::MEDIUM:
-            new_interval = 100;   // 100ms - 默认
+            new_interval = 500;   // 500ms - 默认
             break;
         case SampleRate::FAST:
-            new_interval = 10;    // 10ms - 捕捉热数据
+            new_interval = 100;   // 100ms - 捕捉热数据
             break;
     }
 
