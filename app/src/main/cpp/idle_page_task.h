@@ -16,7 +16,8 @@ namespace idle_page {
 enum class TaskType : uint8_t {
     SAMPLE_START = 0,    // 开始新周期：设置所有页为 idle
     SAMPLE_END = 1,      // 结束周期：读取访问状态并输出日志
-    SHUTDOWN = 2         // 停止工作线程
+    SHUTDOWN = 2,        // 停止工作线程
+    ADD_REGION = 3       // 动态添加监控区域（堆内存分配）
 };
 
 // 采样任务结构
@@ -25,9 +26,13 @@ struct SampleTask {
     uint64_t timestamp_us;  // 任务创建时间（与 mem_reg.log 同源）
     uint64_t sequence_id;   // 采样周期序号
 
-    // 仅 SAMPLE_START 使用
-    uintptr_t monitor_start;
-    uintptr_t monitor_end;
+    // SAMPLE_START: 监控范围限制（可选）
+    // ADD_REGION: 新区域的起始和结束地址
+    uintptr_t region_start;
+    uintptr_t region_end;
+
+    // ADD_REGION 使用：区域标志（如分配类型、热态等级）
+    uint32_t region_flags = 0;
 };
 
 // 无锁单生产者单消费者队列

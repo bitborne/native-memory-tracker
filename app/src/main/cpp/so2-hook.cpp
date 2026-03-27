@@ -89,7 +89,8 @@ Java_com_example_demo_1so_MainActivity_nativeInitHook(JNIEnv* env, jobject thiz,
 
 
     // 100ms 初始周期，自动调整
-    if (idle_page::IdlePageMonitor::instance().init("libdemo_so.so", visit_log_path, 100)) {
+    // 传入空字符串表示只监控堆内存，不监控 SO 代码段
+    if (idle_page::IdlePageMonitor::instance().init("", visit_log_path, 100)) {
         LOGI("IdlePageMonitor initialized: %s", visit_log_path);
     } else {
         LOGE("IdlePageMonitor init failed (may need root)");
