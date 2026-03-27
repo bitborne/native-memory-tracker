@@ -18,6 +18,7 @@ struct MemoryRegion {
     uintptr_t start;
     uintptr_t end;
     char perms[5];      // r-xp, rw-p 等
+    uintptr_t offset;   // 文件偏移
     std::string name;   // 节区名称如 ".text", ".data" 或路径
     bool is_monitor;    // 是否属于监控目标
 };
@@ -31,12 +32,14 @@ struct PageInfo {
 };
 
 // MmapPagemap: 通过 mmap 访问 pagemap（替代 pread）
+// 支持 PFN Helper 模式（当本地无权限时）
 class MmapPagemap {
 public:
     MmapPagemap();
     ~MmapPagemap();
 
     // 打开并 mmap /proc/self/pagemap
+    // 或者连接到 PFN Helper
     bool open();
     void close();
 
@@ -44,12 +47,24 @@ public:
     // 返回 0 表示无效
     uint64_t get_pfn(uintptr_t vaddr) const;
 
-    bool is_open() const { return mmap_base_ != nullptr; }
+    bool is_open() const { return use_helper_ ? helper_fd_ >= 0 : fd_ >= 0; }
+    bool is_using_helper() const { return use_helper_; }
 
 private:
+    // 本地 pagemap
     int fd_ = -1;
     void* mmap_base_ = nullptr;
     size_t mmap_size_ = 0;
+
+    // PFN Helper 模式
+    int helper_fd_ = -1;
+    bool use_helper_ = false;
+
+    // 连接到 PFN Helper
+    int connect_to_helper();
+
+    // 从 Helper 查询 PFN
+    uint64_t get_pfn_from_helper(uintptr_t vaddr) const;
 
     static constexpr uint64_t PFN_MASK = (1ULL << 55) - 1;
     static constexpr uint64_t PAGE_PRESENT = (1ULL << 63);
@@ -83,6 +98,9 @@ public:
                               std::vector<bool>& results);
 
     bool is_open() const { return fd_ >= 0; }
+
+    // 检查是否有 root 权限（page_idle/bitmap 需要 root）
+    static bool check_root_access();
 
 private:
     int fd_ = -1;
