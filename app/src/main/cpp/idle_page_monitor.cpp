@@ -27,13 +27,14 @@ IdlePageMonitor::~IdlePageMonitor() {
 
 // ==================== 初始化 ====================
 
-bool IdlePageMonitor::init(const char* so_name, const char* log_path, int initial_interval_ms) {
+bool IdlePageMonitor::init(MonitorMode mode, const char* so_name, const char* log_path, int initial_interval_ms) {
     if (running_) {
         IDLE_LOGE("Monitor already running");
         return false;
     }
 
-    so_name_ = so_name;
+    mode_ = mode;
+    so_name_ = so_name ? so_name : "";
     log_path_ = log_path;
 
     // 1. 打开日志文件
@@ -69,7 +70,8 @@ bool IdlePageMonitor::init(const char* so_name, const char* log_path, int initia
     });
 
     IDLE_LOGI("IdlePageMonitor initialized");
-    IDLE_LOGI("  Target: %s", so_name);
+    IDLE_LOGI("  Mode: %s", mode_ == MonitorMode::SO_CODE_SECTIONS ? "SO_CODE_SECTIONS" : "HEAP_ALLOCATIONS");
+    IDLE_LOGI("  Target: %s", so_name_.empty() ? "(none)" : so_name_.c_str());
     IDLE_LOGI("  Log: %s", log_path);
     IDLE_LOGI("  Initial interval: %dms", initial_interval_ms);
 
@@ -121,8 +123,8 @@ void IdlePageMonitor::start() {
     }
 
     // 3. 加载运行时内存区域（从 /proc/self/maps 读取）
-    // 如果 so_name 为空或 "none"，则跳过 SO 代码段监控，只监控堆内存
-    if (target_regions_.empty() && !so_name_.empty() && so_name_ != "none") {
+    if (mode_ == MonitorMode::SO_CODE_SECTIONS) {
+        // SO模式：从 maps 加载 SO 区域
         if (!ProcMapsParser::find_so_regions(so_name_.c_str(), target_regions_)) {
             IDLE_LOGE("Failed to find SO regions for %s", so_name_.c_str());
             page_idle_.close();
@@ -136,6 +138,7 @@ void IdlePageMonitor::start() {
             return;
         }
     }
+    // 堆模式：不需要预加载区域，由 track_allocation 动态添加
 
     // 输出区域信息
     IDLE_LOGI("Monitoring %zu regions:", target_regions_.size());
@@ -352,8 +355,22 @@ void IdlePageMonitor::do_sample_end_all() {
             }
             region_pages++;
 
-            // 写入日志 - 使用 region.name 区分堆内存和代码段
-            const char* region_label = !region.name.empty() ? region.name.c_str() : region.perms;
+            // 写入日志 - 根据模式选择显示格式
+            const char* region_label;
+            char label_buffer[128];
+            if (mode_ == MonitorMode::HEAP_ALLOCATIONS) {
+                // 堆模式：显示 (heap)
+                region_label = !region.name.empty() ? region.name.c_str() : region.perms;
+            } else {
+                // SO模式：显示 权限(文件名)
+                const char* name = region.name.empty() ? "" : region.name.c_str();
+                // 提取文件名（不含路径）
+                const char* last_slash = strrchr(name, '/');
+                const char* filename = last_slash ? last_slash + 1 : name;
+                snprintf(label_buffer, sizeof(label_buffer), "%s(%s)",
+                         region.perms, filename);
+                region_label = label_buffer;
+            }
             int n = snprintf(log_buffer_ + log_offset_,
                             LOG_BUFFER_SIZE - log_offset_,
                             "%llu,%llu,0x%llx,%llu,%d,(%s)\n",
@@ -448,6 +465,11 @@ IdlePageMonitor::Stats IdlePageMonitor::get_stats() const {
 // ==================== 堆内存动态跟踪 ====================
 
 void IdlePageMonitor::track_allocation(uintptr_t addr, size_t size, uint32_t flags) {
+    // SO 模式下不跟踪堆内存分配
+    if (mode_ == MonitorMode::SO_CODE_SECTIONS) {
+        return;
+    }
+
     (void)flags;  // 保留用于未来扩展
     if (addr == 0 || size == 0) return;
 
@@ -524,8 +546,9 @@ bool IdlePageMonitor::region_exists(uintptr_t start, uintptr_t end) const {
 
 // ==================== C 接口 ====================
 
-bool idle_page_monitor_init(const char* so_name, const char* log_path) {
-    return IdlePageMonitor::instance().init(so_name, log_path, 100);
+bool idle_page_monitor_init(int mode, const char* so_name, const char* log_path) {
+    auto monitor_mode = static_cast<idle_page::IdlePageMonitor::MonitorMode>(mode);
+    return IdlePageMonitor::instance().init(monitor_mode, so_name, log_path, 100);
 }
 
 void idle_page_monitor_start() {
