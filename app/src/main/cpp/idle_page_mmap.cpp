@@ -1,6 +1,6 @@
 //
 // idle_page_mmap.cpp
-// Mmap 封装实现
+// Mmap 封装实现 - 支持 PFN Helper 模式
 //
 
 #include "idle_page_mmap.h"
@@ -10,8 +10,15 @@
 #include <unistd.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
+#include <sys/socket.h>
+#include <sys/un.h>
 #include <cstring>
 #include <cstdio>
+#include <cinttypes>
+#include <cstdlib>
+#include <errno.h>
+
+#define PFN_HELPER_SOCKET "/data/local/tmp/pfn_helper.sock"
 
 namespace idle_page {
 
@@ -24,18 +31,25 @@ MmapPagemap::~MmapPagemap() {
 }
 
 bool MmapPagemap::open() {
-    if (fd_ >= 0) return true;
+    // 首先尝试连接 PFN Helper
+    helper_fd_ = connect_to_helper();
+    if (helper_fd_ >= 0) {
+        IDLE_LOGI("[IdlePage] Connected to PFN Helper (fd=%d)", helper_fd_);
+        use_helper_ = true;
+        return true;
+    }
 
+    // 回退到本地 pagemap
     fd_ = ::open("/proc/self/pagemap", O_RDONLY);
     if (fd_ < 0) {
-        LOGE("[IdlePage] Failed to open /proc/self/pagemap");
+        IDLE_LOGE("[IdlePage] Failed to open /proc/self/pagemap");
         return false;
     }
 
     // 获取文件大小
     struct stat st;
     if (fstat(fd_, &st) < 0) {
-        LOGE("[IdlePage] fstat pagemap failed");
+        IDLE_LOGE("[IdlePage] fstat pagemap failed");
         ::close(fd_);
         fd_ = -1;
         return false;
@@ -49,14 +63,38 @@ bool MmapPagemap::open() {
     if (mmap_base_ == MAP_FAILED) {
         // mmap 失败，回退到 pread（但尽量避免）
         mmap_base_ = nullptr;
-        LOGI("[IdlePage] pagemap mmap failed, using pread fallback");
+        IDLE_LOGE("[IdlePage] pagemap mmap failed, using pread fallback");
     }
 
-    LOGI("[IdlePage] Pagemap opened (fd=%d)", fd_);
+    IDLE_LOGI("[IdlePage] Pagemap opened (fd=%d)", fd_);
     return true;
 }
 
+// 连接到 PFN Helper
+int MmapPagemap::connect_to_helper() {
+    int sock = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (sock < 0) {
+        return -1;
+    }
+
+    struct sockaddr_un addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sun_family = AF_UNIX;
+    strncpy(addr.sun_path, PFN_HELPER_SOCKET, sizeof(addr.sun_path) - 1);
+
+    if (::connect(sock, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
+        ::close(sock);
+        return -1;
+    }
+
+    return sock;
+}
+
 void MmapPagemap::close() {
+    if (helper_fd_ >= 0) {
+        ::close(helper_fd_);
+        helper_fd_ = -1;
+    }
     if (mmap_base_) {
         munmap(mmap_base_, mmap_size_);
         mmap_base_ = nullptr;
@@ -68,6 +106,10 @@ void MmapPagemap::close() {
 }
 
 uint64_t MmapPagemap::get_pfn(uintptr_t vaddr) const {
+    if (use_helper_ && helper_fd_ >= 0) {
+        return get_pfn_from_helper(vaddr);
+    }
+
     if (fd_ < 0) return 0;
 
     // 计算页框索引
@@ -75,6 +117,7 @@ uint64_t MmapPagemap::get_pfn(uintptr_t vaddr) const {
     uint64_t offset = page_index * 8;  // 每个条目 8 字节
 
     uint64_t entry = 0;
+    ssize_t n = 0;
 
     if (mmap_base_) {
         // 检查是否在缓存范围内
@@ -83,11 +126,24 @@ uint64_t MmapPagemap::get_pfn(uintptr_t vaddr) const {
                 static_cast<const uint8_t*>(mmap_base_) + offset);
         } else {
             // 超出缓存，使用 pread
-            pread(fd_, &entry, sizeof(entry), offset);
+            n = pread(fd_, &entry, sizeof(entry), offset);
         }
     } else {
         // 回退到 pread
-        pread(fd_, &entry, sizeof(entry), offset);
+        n = pread(fd_, &entry, sizeof(entry), offset);
+    }
+
+    if (n < 0) {
+        IDLE_LOGE("[IdlePage] pread pagemap failed: errno=%d", errno);
+        return 0;
+    }
+
+    // 调试：打印前几个页面的读取结果
+    static int debug_count = 0;
+    if (debug_count < 5) {
+        IDLE_LOGI("[IdlePage] get_pfn: vaddr=0x%llx offset=%llu n=%zd entry=0x%016llx",
+                  (unsigned long long)vaddr, (unsigned long long)offset, n, (unsigned long long)entry);
+        debug_count++;
     }
 
     // 检查页是否存在
@@ -96,6 +152,37 @@ uint64_t MmapPagemap::get_pfn(uintptr_t vaddr) const {
     }
 
     return entry & PFN_MASK;
+}
+
+// 从 PFN Helper 查询
+uint64_t MmapPagemap::get_pfn_from_helper(uintptr_t vaddr) const {
+    if (helper_fd_ < 0) return 0;
+
+    // 发送虚拟地址
+    uintptr_t req = vaddr;
+    ssize_t n = send(helper_fd_, &req, sizeof(req), 0);
+    if (n != sizeof(req)) {
+        IDLE_LOGE("[IdlePage] Failed to send request to helper: %zd", n);
+        return 0;
+    }
+
+    // 接收 PFN
+    uint64_t pfn = 0;
+    n = recv(helper_fd_, &pfn, sizeof(pfn), 0);
+    if (n != sizeof(pfn)) {
+        IDLE_LOGE("[IdlePage] Failed to receive response from helper: %zd", n);
+        return 0;
+    }
+
+    // 调试输出
+    static int debug_count = 0;
+    if (debug_count < 5) {
+        IDLE_LOGI("[IdlePage] get_pfn_from_helper: vaddr=0x%llx -> pfn=0x%llx",
+                  (unsigned long long)vaddr, (unsigned long long)pfn);
+        debug_count++;
+    }
+
+    return pfn;
 }
 
 // ==================== MmapPageIdle ====================
@@ -113,11 +200,11 @@ bool MmapPageIdle::open() {
 
     fd_ = ::open("/sys/kernel/mm/page_idle/bitmap", O_RDWR);
     if (fd_ < 0) {
-        LOGE("[IdlePage] Failed to open page_idle/bitmap (need root?)");
+        IDLE_LOGE("[IdlePage] Failed to open page_idle/bitmap (need root?)");
         return false;
     }
 
-    LOGI("[IdlePage] PageIdle opened (fd=%d)", fd_);
+    IDLE_LOGI("[IdlePage] PageIdle opened (fd=%d)", fd_);
     return true;
 }
 
@@ -132,6 +219,39 @@ void MmapPageIdle::close() {
     cached_block_idx_ = UINT64_MAX;
 }
 
+// 检查是否有 root 权限
+bool MmapPageIdle::check_root_access() {
+    // 方法1: 尝试直接打开 page_idle/bitmap
+    int fd = ::open("/sys/kernel/mm/page_idle/bitmap", O_RDWR);
+    if (fd >= 0) {
+        ::close(fd);
+        return true;
+    }
+
+    // 方法2: 检查 uid 是否为 0
+    if (getuid() == 0) {
+        return true;
+    }
+
+    // 方法3: 检查能否访问 su 命令，并尝试获取 root
+    if (access("/system/bin/su", X_OK) == 0 ||
+        access("/system/xbin/su", X_OK) == 0 ||
+        access("/su/bin/su", X_OK) == 0) {
+        // 尝试执行 su 获取 root 权限
+        int ret = system("su -c 'id' > /dev/null 2>&1");
+        if (ret == 0) {
+            // 重新检查 uid
+            if (getuid() == 0) {
+                IDLE_LOGI("[IdlePage] GET ROOT!");
+                return true;
+            }
+        }
+        IDLE_LOGE("[IdlePage] GET root FAILED!");
+    }
+
+    return false;
+}
+
 void MmapPageIdle::load_cache(uint64_t block_idx) {
     if (cached_block_idx_ == block_idx) return;
 
@@ -144,7 +264,7 @@ void MmapPageIdle::load_cache(uint64_t block_idx) {
     ssize_t n = pread(fd_, cache_, CACHE_SIZE, offset);
 
     if (n < 0) {
-        LOGE("[IdlePage] Failed to read bitmap block %llu", block_idx);
+        IDLE_LOGE("[IdlePage] Failed to read bitmap block %" PRIu64, block_idx);
         memset(cache_, 0, CACHE_SIZE);
     } else if (n < CACHE_SIZE) {
         // 部分读取，清零剩余部分
@@ -234,6 +354,7 @@ bool ProcMapsParser::parse_line(const char* line, MemoryRegion& region) {
     region.end = end;
     strncpy(region.perms, perms, 4);
     region.perms[4] = '\0';
+    region.offset = (n >= 4) ? offset : 0;  // 解析偏移量
     region.name = path;
 
     // 去除 path 的前后空格
@@ -252,20 +373,48 @@ bool ProcMapsParser::find_so_regions(const char* so_name,
 
     FILE* fp = fopen("/proc/self/maps", "r");
     if (!fp) {
-        LOGE("[IdlePage] Failed to open /proc/self/maps");
+        IDLE_LOGE("[IdlePage] Failed to open /proc/self/maps");
         return false;
     }
 
     char line[512];
+    bool found_any = false;
     while (fgets(line, sizeof(line), fp)) {
+        // 调试：打印所有包含 "demo" 的行
+        if (strstr(line, "demo") || strstr(line, "libdemo")) {
+            IDLE_LOGI("[IdlePage] Maps line: %s", line);
+        }
         // 检查是否包含目标 so 名称
         if (strstr(line, so_name)) {
+            IDLE_LOGI("[IdlePage] Matched so_name '%s' in line: %s", so_name, line);
             MemoryRegion region;
             if (parse_line(line, region)) {
                 region.is_monitor = true;
                 regions.push_back(region);
-                LOGI("[IdlePage] Found region: 0x%llx-0x%llx %s %s",
+                IDLE_LOGI("[IdlePage] Found region: 0x%" PRIxPTR "-0x%" PRIxPTR " %s %s",
                      region.start, region.end, region.perms, region.name.c_str());
+                found_any = true;
+            } else {
+                IDLE_LOGE("[IdlePage] parse_line failed for: %s", line);
+            }
+        }
+    }
+
+    // 回退方案：如果从 APK 加载（Android 6.0+），尝试匹配 base.apk 的可执行区域
+    if (regions.empty() && strstr(so_name, "demo_so")) {
+        IDLE_LOGI("[IdlePage] Fallback: searching for base.apk regions");
+        rewind(fp);
+        while (fgets(line, sizeof(line), fp)) {
+            // 匹配 base.apk 中的 r-xp（代码段）或 rw-p（数据段）区域
+            if (strstr(line, "base.apk") && (strstr(line, "r-xp") || strstr(line, "rw-p"))) {
+                MemoryRegion region;
+                if (parse_line(line, region)) {
+                    region.is_monitor = true;
+                    regions.push_back(region);
+                    IDLE_LOGI("[IdlePage] Found APK region: 0x%" PRIxPTR "-0x%" PRIxPTR " %s",
+                         region.start, region.end, region.perms);
+                    found_any = true;
+                }
             }
         }
     }
@@ -273,7 +422,7 @@ bool ProcMapsParser::find_so_regions(const char* so_name,
     fclose(fp);
 
     if (regions.empty()) {
-        LOGE("[IdlePage] No regions found for %s", so_name);
+        IDLE_LOGE("[IdlePage] No regions found for %s", so_name);
         return false;
     }
 
@@ -285,7 +434,7 @@ bool ProcMapsParser::get_all_regions(std::vector<MemoryRegion>& regions) {
 
     FILE* fp = fopen("/proc/self/maps", "r");
     if (!fp) {
-        LOGE("[IdlePage] Failed to open /proc/self/maps");
+        IDLE_LOGE("[IdlePage] Failed to open /proc/self/maps");
         return false;
     }
 
