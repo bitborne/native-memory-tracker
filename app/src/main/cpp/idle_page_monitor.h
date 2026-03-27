@@ -8,7 +8,6 @@
 
 #include "idle_page_task.h"
 #include "idle_page_mmap.h"
-#include "idle_page_elf.h"
 #include "idle_page_timer.h"
 
 #include <cstdint>
@@ -34,8 +33,11 @@ public:
     // initial_interval_ms: 初始采样周期
     bool init(const char* so_name, const char* log_path, int initial_interval_ms = 100);
 
-    // 设置监控目标范围（从 maps 自动检测，也可手动指定）
-    void set_target_range(uintptr_t start, uintptr_t end);
+    // 添加监控目标区域
+    void add_target_region(const MemoryRegion& region);
+
+    // 设置监控目标（自动从 maps 加载所有区域）
+    void set_target_regions(const std::vector<MemoryRegion>& regions);
 
     // 启停监控
     void start();
@@ -67,12 +69,12 @@ private:
     // 任务执行
     void execute_task(const SampleTask& task);
 
-    // 采样操作
-    void do_sample_start(uintptr_t start, uintptr_t end);
-    void do_sample_end();
+    // 采样操作 - 分别处理每个区域
+    void do_sample_start_all();
+    void do_sample_end_all();
 
-    // 初始化页缓存（首次采样时调用）
-    bool init_page_cache(uintptr_t start, uintptr_t end);
+    // 为单个区域初始化页缓存
+    bool init_page_cache_for_region(const MemoryRegion& region);
 
     // 日志写入
     void write_log_header();
@@ -81,18 +83,21 @@ private:
     // 获取时间戳（微秒，与 mem_reg.log 同源）
     static uint64_t get_timestamp_us();
 
+    // 根据地址查找权限（如 r-xp, rw-p）
+    const char* lookup_permission(uintptr_t vaddr) const;
+
     // ===== 组件 =====
     MmapPagemap pagemap_;
     MmapPageIdle page_idle_;
-    RuntimeSectionResolver section_resolver_;
     IdlePageTimer timer_;
     TaskQueue task_queue_;
+
+    // ===== 运行时区域缓存 =====
+    std::vector<MemoryRegion> target_regions_;
 
     // ===== 配置 =====
     std::string so_name_;
     std::string log_path_;
-    uintptr_t target_start_ = 0;
-    uintptr_t target_end_ = 0;
 
     // ===== 状态 =====
     std::atomic<bool> running_{false};
