@@ -21,6 +21,12 @@ namespace idle_page {
 // IdlePageMonitor: 主监控类（单例）
 class IdlePageMonitor {
 public:
+    // 监控模式
+    enum class MonitorMode : uint8_t {
+        SO_CODE_SECTIONS = 0,   // 监控SO代码段，日志显示(权限+文件名)
+        HEAP_ALLOCATIONS = 1    // 监控堆内存，日志显示(heap)
+    };
+
     static IdlePageMonitor& instance();
 
     // 禁止拷贝
@@ -28,10 +34,11 @@ public:
     IdlePageMonitor& operator=(const IdlePageMonitor&) = delete;
 
     // 初始化监控
-    // so_name: 要监控的 SO 文件名，如 "libdemo_so.so"
+    // mode: 监控模式（SO代码段 或 堆内存）
+    // so_name: SO文件名（仅在SO模式下使用，如 "libdemo_so.so"）
     // log_path: 日志文件路径（mem_visit.log）
     // initial_interval_ms: 初始采样周期
-    bool init(const char* so_name, const char* log_path, int initial_interval_ms = 100);
+    bool init(MonitorMode mode, const char* so_name, const char* log_path, int initial_interval_ms = 100);
 
     // 添加监控目标区域
     void add_target_region(const MemoryRegion& region);
@@ -110,6 +117,7 @@ private:
     std::vector<MemoryRegion> target_regions_;
 
     // ===== 配置 =====
+    MonitorMode mode_;
     std::string so_name_;
     std::string log_path_;
 
@@ -138,7 +146,7 @@ private:
 
 // C 接口（供 JNI/Hook 调用）
 extern "C" {
-    bool idle_page_monitor_init(const char* so_name, const char* log_path);
+    bool idle_page_monitor_init(int mode, const char* so_name, const char* log_path);
     void idle_page_monitor_start();
     void idle_page_monitor_stop();
     void idle_page_monitor_shutdown();
