@@ -1,6 +1,6 @@
 //
 // idle_page_monitor.cpp
-// Idle Page 监控主类实现
+// Idle Page 监控主类实现 - 支持多区域监控
 //
 
 #include "idle_page_monitor.h"
@@ -36,38 +36,17 @@ bool IdlePageMonitor::init(const char* so_name, const char* log_path, int initia
     so_name_ = so_name;
     log_path_ = log_path;
 
-    // 1. 初始化节区解析器
-    if (!section_resolver_.init(so_name)) {
-        IDLE_LOGE("Failed to init section resolver for %s", so_name);
-        return false;
-    }
-
-    // 2. 打开 pagemap
-    if (!pagemap_.open()) {
-        IDLE_LOGE("Failed to open pagemap");
-        return false;
-    }
-
-    // 3. 打开 page_idle
-    if (!page_idle_.open()) {
-        IDLE_LOGE("Failed to open page_idle/bitmap");
-        pagemap_.close();
-        return false;
-    }
-
-    // 4. 打开日志文件
+    // 1. 打开日志文件
     log_fd_ = ::open(log_path, O_WRONLY | O_CREAT | O_TRUNC, 0666);
     if (log_fd_ < 0) {
         IDLE_LOGE("Failed to open log: %s", log_path);
-        page_idle_.close();
-        pagemap_.close();
         return false;
     }
 
-    // 5. 写入日志头
+    // 2. 写入日志头
     write_log_header();
 
-    // 6. 初始化定时器
+    // 3. 初始化定时器（但先不启动）
     timer_.init(initial_interval_ms, [this]() {
         // 定时器回调：投递任务
         uint64_t seq = sequence_id_.fetch_add(1);
@@ -75,18 +54,15 @@ bool IdlePageMonitor::init(const char* so_name, const char* log_path, int initia
 
         SampleTask task;
         task.timestamp_us = now;
-        task.sequence_id = seq;
+        // START 和 END 共享同一个 sequence_id（每两个任务一个周期）
+        task.sequence_id = seq / 2;
 
         if (seq % 2 == 0) {
             // 偶数：START 任务
             task.type = TaskType::SAMPLE_START;
-            task.monitor_start = target_start_;
-            task.monitor_end = target_end_;
         } else {
             // 奇数：END 任务
             task.type = TaskType::SAMPLE_END;
-            task.monitor_start = 0;
-            task.monitor_end = 0;
         }
 
         task_queue_.enqueue(task);
@@ -100,10 +76,21 @@ bool IdlePageMonitor::init(const char* so_name, const char* log_path, int initia
     return true;
 }
 
-void IdlePageMonitor::set_target_range(uintptr_t start, uintptr_t end) {
-    target_start_ = start;
-    target_end_ = end;
-    IDLE_LOGI("Target range: 0x%llx - 0x%llx", (unsigned long long)start, (unsigned long long)end);
+void IdlePageMonitor::add_target_region(const MemoryRegion& region) {
+    target_regions_.push_back(region);
+    IDLE_LOGI("Added target region: 0x%llx - 0x%llx (%s)",
+              (unsigned long long)region.start, (unsigned long long)region.end,
+              region.perms);
+}
+
+void IdlePageMonitor::set_target_regions(const std::vector<MemoryRegion>& regions) {
+    target_regions_ = regions;
+    IDLE_LOGI("Set %zu target regions", target_regions_.size());
+    for (const auto& r : target_regions_) {
+        IDLE_LOGI("  0x%llx - 0x%llx (%s)",
+                  (unsigned long long)r.start, (unsigned long long)r.end,
+                  r.perms);
+    }
 }
 
 // ==================== 启停控制 ====================
@@ -111,27 +98,62 @@ void IdlePageMonitor::set_target_range(uintptr_t start, uintptr_t end) {
 void IdlePageMonitor::start() {
     if (running_) return;
 
-    // 自动检测目标范围（如果未设置）
-    if (target_start_ == 0 || target_end_ == 0) {
-        std::vector<MemoryRegion> regions;
-        if (ProcMapsParser::find_so_regions(so_name_.c_str(), regions)) {
-            // 合并所有区域
-            target_start_ = regions[0].start;
-            target_end_ = regions[0].end;
-            for (const auto& r : regions) {
-                if (r.start < target_start_) target_start_ = r.start;
-                if (r.end > target_end_) target_end_ = r.end;
-            }
-            IDLE_LOGI("Auto-detected range: 0x%llx - 0x%llx",
-                     (unsigned long long)target_start_, (unsigned long long)target_end_);
+    // 预检查 root 权限
+    bool has_root = MmapPageIdle::check_root_access();
+    if (!has_root) {
+        IDLE_LOGE("==========================================");
+        IDLE_LOGE("Root permission required for Idle Page Monitor!");
+        IDLE_LOGE("Please run with: adb shell su -c 'am start ...'");
+        IDLE_LOGE("Or use: adb shell su -c '/data/app/.../libso2.so'");
+        IDLE_LOGE("==========================================");
+    }
+
+    // 1. 打开 pagemap
+    if (!pagemap_.open()) {
+        IDLE_LOGE("Failed to open pagemap");
+        return;
+    }
+
+    // 2. 打开 page_idle（需要 root）
+    bool page_idle_available = page_idle_.open();
+    if (!page_idle_available) {
+        IDLE_LOGI("page_idle/bitmap not available (no root), running in degraded mode");
+    }
+
+    // 3. 加载运行时内存区域（从 /proc/self/maps 读取）
+    if (target_regions_.empty()) {
+        if (!ProcMapsParser::find_so_regions(so_name_.c_str(), target_regions_)) {
+            IDLE_LOGE("Failed to find SO regions for %s", so_name_.c_str());
+            page_idle_.close();
+            pagemap_.close();
+            return;
+        }
+        if (target_regions_.empty()) {
+            IDLE_LOGE("No regions found for %s", so_name_.c_str());
+            page_idle_.close();
+            pagemap_.close();
+            return;
         }
     }
 
-    // 启动工作线程
+    // 输出区域信息
+    IDLE_LOGI("Monitoring %zu regions:", target_regions_.size());
+    size_t total_pages = 0;
+    for (const auto& r : target_regions_) {
+        size_t pages = (r.end - r.start + 4095) / 4096;
+        total_pages += pages;
+        IDLE_LOGI("  0x%llx - 0x%llx (%s): %zu pages",
+                  (unsigned long long)r.start, (unsigned long long)r.end,
+                  r.perms, pages);
+    }
+    IDLE_LOGI("Total: %zu pages (~%.2f MB)",
+              total_pages, total_pages * 4096.0 / (1024 * 1024));
+
+    // 4. 启动工作线程
     worker_running_ = true;
     worker_thread_ = std::thread(&IdlePageMonitor::worker_loop, this);
 
-    // 启动定时器
+    // 5. 启动定时器
     timer_.start();
     running_ = true;
 
@@ -172,6 +194,7 @@ void IdlePageMonitor::shutdown() {
     // 清空缓存
     page_cache_.clear();
     pfn_list_.clear();
+    target_regions_.clear();
 
     IDLE_LOGI("Monitor shutdown complete");
 }
@@ -206,47 +229,53 @@ void IdlePageMonitor::worker_loop() {
 void IdlePageMonitor::execute_task(const SampleTask& task) {
     switch (task.type) {
         case TaskType::SAMPLE_START:
+            IDLE_LOGI("[IdlePage] SAMPLE_START #%llu (%zu regions)",
+                      (unsigned long long)task.sequence_id, target_regions_.size());
             current_sequence_ = task.sequence_id;
-            do_sample_start(task.monitor_start, task.monitor_end);
+            do_sample_start_all();
             break;
 
         case TaskType::SAMPLE_END:
+            IDLE_LOGI("[IdlePage] SAMPLE_END #%llu", (unsigned long long)task.sequence_id);
             if (task.sequence_id == current_sequence_) {
-                do_sample_end();
+                do_sample_end_all();
+            } else {
+                IDLE_LOGI("[IdlePage] SAMPLE_END sequence mismatch: task=%llu, current=%llu",
+                          (unsigned long long)task.sequence_id, (unsigned long long)current_sequence_);
             }
             break;
 
         default:
+            IDLE_LOGI("[IdlePage] Unknown task type");
             break;
     }
 }
 
-// ==================== 采样操作 ====================
+// ==================== 采样操作（多区域） ====================
 
-bool IdlePageMonitor::init_page_cache(uintptr_t start, uintptr_t end) {
+bool IdlePageMonitor::init_page_cache_for_region(const MemoryRegion& region) {
+    // 清空当前缓存，为该区域重新构建
     page_cache_.clear();
     pfn_list_.clear();
 
-    if (start == 0 || end == 0 || end <= start) {
-        IDLE_LOGE("Invalid range: 0x%llx - 0x%llx", (unsigned long long)start, (unsigned long long)end);
+    size_t page_count = (region.end - region.start + 4095) / 4096;
+    if (page_count == 0) {
+        IDLE_LOGE("Empty region: 0x%llx - 0x%llx",
+                  (unsigned long long)region.start, (unsigned long long)region.end);
         return false;
     }
 
-    size_t page_count = (end - start + 4095) / 4096;
     page_cache_.reserve(page_count);
     pfn_list_.reserve(page_count);
 
-    for (uintptr_t addr = start; addr < end; addr += 4096) {
+    for (uintptr_t addr = region.start; addr < region.end; addr += 4096) {
         uint64_t pfn = pagemap_.get_pfn(addr);
 
         PageInfo info;
         info.vaddr = addr;
         info.pfn = pfn;
-        info.is_accessible = (pfn != 0);
-
-        // 查找节区信息
-        // 这里简化为只存储索引，实际使用时再查询
-        info.region_idx = 0;
+        info.is_accessible = true;
+        info.region_idx = 0;  // 不需要索引，直接从 region 获取权限
 
         page_cache_.push_back(info);
 
@@ -255,78 +284,96 @@ bool IdlePageMonitor::init_page_cache(uintptr_t start, uintptr_t end) {
         }
     }
 
-    // 预分配结果数组
     access_results_.resize(pfn_list_.size());
 
-    IDLE_LOGI("Page cache initialized: %zu pages (%zu valid PFNs)",
-             page_cache_.size(), pfn_list_.size());
-
-    stats_.total_pages = page_cache_.size();
+    IDLE_LOGI("Region cache: 0x%llx-0x%llx (%s): %zu pages (%zu valid PFNs)",
+              (unsigned long long)region.start, (unsigned long long)region.end,
+              region.perms, page_cache_.size(), pfn_list_.size());
 
     return !page_cache_.empty();
 }
 
-void IdlePageMonitor::do_sample_start(uintptr_t start, uintptr_t end) {
-    // 首次采样：构建缓存
-    if (first_sample_.exchange(false)) {
-        if (!init_page_cache(start, end)) {
-            IDLE_LOGE("Failed to init page cache");
-            return;
-        }
-    }
+void IdlePageMonitor::do_sample_start_all() {
+    // 为每个区域设置 idle 状态
+    // 注意：我们需要为每个区域单独处理，但 page_idle 操作是针对 PFN 的
+    // 优化：收集所有 PFN，批量设置 idle
 
-    // 设置所有页为 idle 状态
-    // 清除 PTE Accessed bit，准备下一周期的检测
-    for (const auto& page : page_cache_) {
-        if (page.is_accessible && page.pfn != 0) {
-            page_idle_.set_idle(page.pfn);
+    std::vector<uint64_t> all_pfns;
+    all_pfns.reserve(1024);
+
+    for (const auto& region : target_regions_) {
+        // 临时收集该区域的 PFN
+        std::vector<uint64_t> region_pfns;
+        for (uintptr_t addr = region.start; addr < region.end; addr += 4096) {
+            uint64_t pfn = pagemap_.get_pfn(addr);
+            if (pfn != 0) {
+                region_pfns.push_back(pfn);
+            }
         }
+
+        // 批量设置该区域的页为 idle
+        for (uint64_t pfn : region_pfns) {
+            page_idle_.set_idle(pfn);
+        }
+
+        IDLE_LOGD("Set %zu pages to idle for region 0x%llx-0x%llx",
+                  region_pfns.size(),
+                  (unsigned long long)region.start, (unsigned long long)region.end);
     }
 }
 
-void IdlePageMonitor::do_sample_end() {
-    if (page_cache_.empty()) return;
-
+void IdlePageMonitor::do_sample_end_all() {
     uint64_t timestamp = get_timestamp_us();
-    size_t pfn_idx = 0;
-    size_t accessed_count = 0;
+    size_t total_pages = 0;
+    size_t total_accessed = 0;
 
-    // 批量检查访问状态
-    for (const auto& page : page_cache_) {
-        bool was_accessed = false;
+    // 分别处理每个区域
+    for (const auto& region : target_regions_) {
+        size_t region_pages = 0;
+        size_t region_accessed = 0;
 
-        if (page.is_accessible && page.pfn != 0) {
-            was_accessed = page_idle_.is_accessed(page.pfn);
-            pfn_idx++;
+        for (uintptr_t addr = region.start; addr < region.end; addr += 4096) {
+            uint64_t pfn = pagemap_.get_pfn(addr);
+            int accessed_status = 0;
+
+            if (pfn != 0) {
+                bool was_accessed = page_idle_.is_accessed(pfn);
+                accessed_status = was_accessed ? 1 : 0;
+                if (was_accessed) {
+                    region_accessed++;
+                }
+            } else {
+                accessed_status = -1;  // unknown
+            }
+            region_pages++;
+
+            // 写入日志
+            int n = snprintf(log_buffer_ + log_offset_,
+                            LOG_BUFFER_SIZE - log_offset_,
+                            "%llu,%llu,0x%llx,%llu,%d,(%s)\n",
+                            (unsigned long long)timestamp,
+                            (unsigned long long)current_sequence_,
+                            (unsigned long long)addr,
+                            (unsigned long long)pfn,
+                            accessed_status,
+                            region.perms);
+
+            if (n > 0) {
+                log_offset_ += n;
+            }
+
+            // 缓冲区满时刷新
+            if (log_offset_ >= LOG_BUFFER_SIZE - 256) {
+                flush_log_buffer();
+            }
         }
 
-        if (was_accessed) {
-            accessed_count++;
-        }
+        total_pages += region_pages;
+        total_accessed += region_accessed;
 
-        // 获取节区信息
-        std::string section = section_resolver_.resolve(page.vaddr);
-
-        // 写入日志
-        // 格式: timestamp_us,sequence,vaddr,pfn,accessed,section
-        int n = snprintf(log_buffer_ + log_offset_,
-                        LOG_BUFFER_SIZE - log_offset_,
-                        "%llu,%llu,0x%llx,%llu,%d,%s\n",
-                        (unsigned long long)timestamp,
-                        (unsigned long long)current_sequence_,
-                        (unsigned long long)page.vaddr,
-                        (unsigned long long)page.pfn,
-                        was_accessed ? 1 : 0,
-                        section.c_str());
-
-        if (n > 0) {
-            log_offset_ += n;
-        }
-
-        // 缓冲区满时刷新
-        if (log_offset_ >= LOG_BUFFER_SIZE - 256) {
-            flush_log_buffer();
-        }
+        IDLE_LOGD("Region 0x%llx-0x%llx: %zu/%zu accessed",
+                  (unsigned long long)region.start, (unsigned long long)region.end,
+                  region_accessed, region_pages);
     }
 
     // 刷新日志
@@ -334,9 +381,9 @@ void IdlePageMonitor::do_sample_end() {
 
     // 更新统计
     stats_.total_samples++;
-    stats_.accessed_pages += accessed_count;
-    float ratio = page_cache_.empty() ? 0.0f :
-                  (float)accessed_count / page_cache_.size();
+    stats_.accessed_pages += total_accessed;
+    stats_.total_pages = total_pages;
+    float ratio = total_pages > 0 ? (float)total_accessed / total_pages : 0.0f;
     stats_.avg_access_ratio = ratio;
     stats_.current_interval_ms = timer_.get_interval_ms();
 
@@ -345,9 +392,9 @@ void IdlePageMonitor::do_sample_end() {
 
     // 每 10 个周期输出一次统计
     if (current_sequence_ % 10 == 0) {
-        IDLE_LOGI("Sample #%llu: accessed %zu/%zu (%.1f%%)",
-                 (unsigned long long)current_sequence_,
-                 accessed_count, page_cache_.size(), ratio * 100);
+        IDLE_LOGI("Sample #%llu: %zu/%zu accessed (%.1f%%)",
+                  (unsigned long long)current_sequence_,
+                  total_accessed, total_pages, ratio * 100);
     }
 }
 
@@ -355,8 +402,9 @@ void IdlePageMonitor::do_sample_end() {
 
 void IdlePageMonitor::write_log_header() {
     const char* header = "# mem_visit.log - Idle Page Tracking\n"
-                         "# Format: timestamp_us,sequence,vaddr,pfn,accessed,section\n"
-                         "# accessed: 1=accessed, 0=idle\n";
+                         "# Format: timestamp_us,sequence,vaddr,pfn,accessed,perms\n"
+                         "# accessed: 1=accessed, 0=idle, -1=unknown (no PFN)\n"
+                         "# perms: memory permissions like r-xp, rw-p, r--p\n";
 
     if (log_fd_ >= 0) {
         write(log_fd_, header, strlen(header));
@@ -378,6 +426,15 @@ uint64_t IdlePageMonitor::get_timestamp_us() {
         steady_clock::now().time_since_epoch()).count();
 }
 
+const char* IdlePageMonitor::lookup_permission(uintptr_t vaddr) const {
+    for (const auto& region : target_regions_) {
+        if (vaddr >= region.start && vaddr < region.end) {
+            return region.perms;
+        }
+    }
+    return "----";
+}
+
 IdlePageMonitor::Stats IdlePageMonitor::get_stats() const {
     return stats_;
 }
@@ -385,7 +442,6 @@ IdlePageMonitor::Stats IdlePageMonitor::get_stats() const {
 // ==================== C 接口 ====================
 
 bool idle_page_monitor_init(const char* so_name, const char* log_path) {
-    // 使用 100ms 默认周期
     return IdlePageMonitor::instance().init(so_name, log_path, 100);
 }
 
