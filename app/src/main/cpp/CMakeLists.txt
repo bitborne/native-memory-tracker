@@ -46,7 +46,18 @@ target_link_libraries(${CMAKE_PROJECT_NAME}
   )
 
 # so2: Hook 内存检测库
-add_library(so2 SHARED so2-hook.cpp log_buffer.cpp log_hooks.cpp)
+# 包含 Idle Page 监控模块
+set(SO2_SOURCES
+    so2-hook.cpp
+    log_buffer.cpp
+    log_hooks.cpp
+    idle_page_task.cpp
+    idle_page_mmap.cpp
+    idle_page_timer.cpp
+    idle_page_monitor.cpp
+)
+
+add_library(so2 SHARED ${SO2_SOURCES})
 target_link_libraries(so2 bytehook::bytehook log atomic)
 
 # ========================================
@@ -58,5 +69,16 @@ set(BUILD_ELF_READER_STATIC ON)
 set(BUILD_ELF_READER_BINARY ON)
 add_subdirectory(elf_reader)
 
-# 将 elf_reader 静态库链接到 so2（后续步骤需要时启用）
+# 将 elf_reader 静态库链接到 so2（idle_page_elf 需要）
+# 注意：idle_page_elf 已移除，但 elf_reader 仍可作为学习工具保留
 # target_link_libraries(so2 elf_reader_static)
+
+# ========================================
+# PFN Helper - 独立的 root 权限 PFN 查询服务
+# ========================================
+# 这是一个独立的可执行文件，需要以 root 运行
+# 使用方法：
+#   adb push pfn_helper /data/local/tmp/
+#   adb shell su -c "/data/local/tmp/pfn_helper <pid>"
+add_executable(pfn_helper pfn_helper.cpp)
+target_link_libraries(pfn_helper log)
