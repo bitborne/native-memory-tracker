@@ -4,6 +4,7 @@
 
 #include "log_hooks.h"
 #include "log_buffer.h"
+#include "idle_page_monitor.h"
 #include <android/log.h>
 #include <fcntl.h>
 #include <unistd.h>
@@ -69,6 +70,12 @@ void* my_malloc(size_t size) {
               malloc_usable_size(result), gettid(),
               backtrace[0], backtrace[1], backtrace[2], backtrace[3], backtrace[4]);
 
+    // 添加到 IdlePageMonitor 进行访问跟踪
+    if (result) {
+        idle_page::IdlePageMonitor::instance().track_allocation(
+            reinterpret_cast<uintptr_t>(result), malloc_usable_size(result));
+    }
+
     return result;
 }
 
@@ -100,6 +107,12 @@ void* my_calloc(size_t num, size_t size) {
               malloc_usable_size(result), gettid(),
               backtrace[0], backtrace[1], backtrace[2], backtrace[3], backtrace[4]);
 
+    // 添加到 IdlePageMonitor 进行访问跟踪
+    if (result) {
+        idle_page::IdlePageMonitor::instance().track_allocation(
+            reinterpret_cast<uintptr_t>(result), malloc_usable_size(result));
+    }
+
     return result;
 }
 
@@ -117,6 +130,12 @@ void* my_realloc(void* ptr, size_t size) {
               malloc_usable_size(result), gettid(),
               backtrace[0], backtrace[1], backtrace[2], backtrace[3], backtrace[4]);
 
+    // 添加到 IdlePageMonitor 进行访问跟踪
+    if (result) {
+        idle_page::IdlePageMonitor::instance().track_allocation(
+            reinterpret_cast<uintptr_t>(result), malloc_usable_size(result));
+    }
+
     return result;
 }
 
@@ -133,6 +152,12 @@ void* my_mmap(void* addr, size_t length, int prot, int flags, int fd, off_t offs
               get_timestamp_us(), TYPE_MMAP, result, length,
               length, gettid(),  // mmap实际大小就是length
               backtrace[0], backtrace[1], backtrace[2], backtrace[3], backtrace[4]);
+
+    // 添加到 IdlePageMonitor 进行访问跟踪
+    if (result != MAP_FAILED) {
+        idle_page::IdlePageMonitor::instance().track_allocation(
+            reinterpret_cast<uintptr_t>(result), length);
+    }
 
     return result;
 }
@@ -162,6 +187,13 @@ void* my_mmap64(void* addr, size_t length, int prot, int flags, int fd, off64_t 
               get_timestamp_us(), TYPE_MMAP64, result,
               length, length, gettid(),
               backtrace[0], backtrace[1], backtrace[2], backtrace[3], backtrace[4]);
+
+    // 添加到 IdlePageMonitor 进行访问跟踪
+    if (result != MAP_FAILED) {
+        idle_page::IdlePageMonitor::instance().track_allocation(
+            reinterpret_cast<uintptr_t>(result), length);
+    }
+
     return result;
 }
 
@@ -182,6 +214,12 @@ int my_posix_memalign(void** memptr, size_t alignment, size_t size) {
               size, malloc_usable_size(*memptr), gettid(),
               backtrace[0], backtrace[1], backtrace[2], backtrace[3], backtrace[4]);
 
+    // 添加到 IdlePageMonitor 进行访问跟踪
+    if (result == 0 && *memptr) {
+        idle_page::IdlePageMonitor::instance().track_allocation(
+            reinterpret_cast<uintptr_t>(*memptr), malloc_usable_size(*memptr));
+    }
+
     return result;
 }
 
@@ -200,6 +238,12 @@ void* my_aligned_alloc(size_t alignment, size_t size) {
               get_timestamp_us(), TYPE_ALIGNED_ALLOC, result,
               size, malloc_usable_size(result), gettid(),
               backtrace[0], backtrace[1], backtrace[2], backtrace[3], backtrace[4]);
+
+    // 添加到 IdlePageMonitor 进行访问跟踪
+    if (result) {
+        idle_page::IdlePageMonitor::instance().track_allocation(
+            reinterpret_cast<uintptr_t>(result), malloc_usable_size(result));
+    }
 
     return result;
 }

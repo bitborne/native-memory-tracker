@@ -121,7 +121,8 @@ void IdlePageMonitor::start() {
     }
 
     // 3. 加载运行时内存区域（从 /proc/self/maps 读取）
-    if (target_regions_.empty()) {
+    // 如果 so_name 为空或 "none"，则跳过 SO 代码段监控，只监控堆内存
+    if (target_regions_.empty() && !so_name_.empty() && so_name_ != "none") {
         if (!ProcMapsParser::find_so_regions(so_name_.c_str(), target_regions_)) {
             IDLE_LOGE("Failed to find SO regions for %s", so_name_.c_str());
             page_idle_.close();
@@ -245,6 +246,10 @@ void IdlePageMonitor::execute_task(const SampleTask& task) {
             }
             break;
 
+        case TaskType::ADD_REGION:
+            handle_add_region(task.region_start, task.region_end, task.region_flags);
+            break;
+
         default:
             IDLE_LOGI("[IdlePage] Unknown task type");
             break;
@@ -347,7 +352,8 @@ void IdlePageMonitor::do_sample_end_all() {
             }
             region_pages++;
 
-            // 写入日志
+            // 写入日志 - 使用 region.name 区分堆内存和代码段
+            const char* region_label = !region.name.empty() ? region.name.c_str() : region.perms;
             int n = snprintf(log_buffer_ + log_offset_,
                             LOG_BUFFER_SIZE - log_offset_,
                             "%llu,%llu,0x%llx,%llu,%d,(%s)\n",
@@ -356,7 +362,7 @@ void IdlePageMonitor::do_sample_end_all() {
                             (unsigned long long)addr,
                             (unsigned long long)pfn,
                             accessed_status,
-                            region.perms);
+                            region_label);
 
             if (n > 0) {
                 log_offset_ += n;
@@ -402,9 +408,9 @@ void IdlePageMonitor::do_sample_end_all() {
 
 void IdlePageMonitor::write_log_header() {
     const char* header = "# mem_visit.log - Idle Page Tracking\n"
-                         "# Format: timestamp_us,sequence,vaddr,pfn,accessed,perms\n"
+                         "# Format: timestamp_us,sequence,vaddr,pfn,accessed,region_name\n"
                          "# accessed: 1=accessed, 0=idle, -1=unknown (no PFN)\n"
-                         "# perms: memory permissions like r-xp, rw-p, r--p\n";
+                         "# region_name: heap, base.apk, or memory permissions (r-xp, rw-p)\n";
 
     if (log_fd_ >= 0) {
         write(log_fd_, header, strlen(header));
@@ -439,6 +445,83 @@ IdlePageMonitor::Stats IdlePageMonitor::get_stats() const {
     return stats_;
 }
 
+// ==================== 堆内存动态跟踪 ====================
+
+void IdlePageMonitor::track_allocation(uintptr_t addr, size_t size, uint32_t flags) {
+    (void)flags;  // 保留用于未来扩展
+    if (addr == 0 || size == 0) return;
+
+    // 页对齐处理：向下对齐到 4KB 边界
+    uintptr_t page_start = addr & ~0xFFFULL;
+    // 向上对齐到 4KB 边界
+    uintptr_t page_end = (addr + size + 4095) & ~0xFFFULL;
+
+    // 如果区域已存在，跳过
+    if (region_exists(page_start, page_end)) {
+        return;
+    }
+
+    SampleTask task;
+    task.type = TaskType::ADD_REGION;
+    task.timestamp_us = get_timestamp_us();
+    task.sequence_id = 0;  // ADD_REGION 不需要 sequence_id
+    task.region_start = page_start;
+    task.region_end = page_end;
+    task.region_flags = flags;  // 使用传入的 flags 参数
+
+    // 异步提交任务（非阻塞，队列满时丢弃）
+    if (!task_queue_.enqueue(task)) {
+        IDLE_LOGD("Task queue full, dropping ADD_REGION for 0x%llx-0x%llx",
+                  (unsigned long long)page_start, (unsigned long long)page_end);
+    }
+}
+
+void IdlePageMonitor::untrack_allocation(uintptr_t addr, size_t size) {
+    // TODO: 实现区域移除（需要维护 address->size 映射）
+    // 当前简化处理：只添加不删除，避免复杂的状态同步
+    (void)addr;
+    (void)size;
+}
+
+void IdlePageMonitor::handle_add_region(uintptr_t start, uintptr_t end, uint32_t flags) {
+    (void)flags;  // 保留用于未来扩展
+
+    // 再次检查（双检锁模式，虽然这里不是锁）
+    if (region_exists(start, end)) {
+        return;
+    }
+
+    MemoryRegion region;
+    region.start = start;
+    region.end = end;
+    strncpy(region.perms, "rw-p", sizeof(region.perms) - 1);
+    region.perms[sizeof(region.perms) - 1] = '\0';
+    region.offset = 0;
+    region.name = "heap";
+    region.is_monitor = true;
+
+    target_regions_.push_back(region);
+
+    size_t pages = (end - start) / 4096;
+    IDLE_LOGI("[HeapTrack] Added region #%zu: 0x%llx-0x%llx (%zu pages)",
+              target_regions_.size(),
+              (unsigned long long)start, (unsigned long long)end, pages);
+}
+
+bool IdlePageMonitor::region_exists(uintptr_t start, uintptr_t end) const {
+    for (const auto& r : target_regions_) {
+        // 完全重叠或包含
+        if (r.start == start && r.end == end) {
+            return true;
+        }
+        // 部分重叠也视为存在（简化处理）
+        if (start < r.end && end > r.start) {
+            return true;
+        }
+    }
+    return false;
+}
+
 // ==================== C 接口 ====================
 
 bool idle_page_monitor_init(const char* so_name, const char* log_path) {
@@ -455,6 +538,14 @@ void idle_page_monitor_stop() {
 
 void idle_page_monitor_shutdown() {
     IdlePageMonitor::instance().shutdown();
+}
+
+void idle_page_track_allocation(void* addr, size_t size) {
+    IdlePageMonitor::instance().track_allocation(reinterpret_cast<uintptr_t>(addr), size);
+}
+
+void idle_page_untrack_allocation(void* addr, size_t size) {
+    IdlePageMonitor::instance().untrack_allocation(reinterpret_cast<uintptr_t>(addr), size);
 }
 
 } // namespace idle_page

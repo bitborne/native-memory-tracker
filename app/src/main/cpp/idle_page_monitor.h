@@ -59,6 +59,14 @@ public:
     };
     Stats get_stats() const;
 
+    // ========== 堆内存动态跟踪（供 Hook 调用） ==========
+
+    // 线程安全：异步提交 ADD_REGION 任务
+    void track_allocation(uintptr_t addr, size_t size, uint32_t flags = 0);
+
+    // 动态移除区域（对应 free/munmap，暂未实现）
+    void untrack_allocation(uintptr_t addr, size_t size);
+
 private:
     IdlePageMonitor() = default;
     ~IdlePageMonitor();
@@ -68,6 +76,12 @@ private:
 
     // 任务执行
     void execute_task(const SampleTask& task);
+
+    // 处理 ADD_REGION 任务
+    void handle_add_region(uintptr_t start, uintptr_t end, uint32_t flags);
+
+    // 区域去重检查
+    bool region_exists(uintptr_t start, uintptr_t end) const;
 
     // 采样操作 - 分别处理每个区域
     void do_sample_start_all();
@@ -122,12 +136,16 @@ private:
     Stats stats_;
 };
 
-// C 接口（供 JNI 调用）
+// C 接口（供 JNI/Hook 调用）
 extern "C" {
     bool idle_page_monitor_init(const char* so_name, const char* log_path);
     void idle_page_monitor_start();
     void idle_page_monitor_stop();
     void idle_page_monitor_shutdown();
+
+    // 堆内存跟踪接口（供 log_hooks.cpp 调用）
+    void idle_page_track_allocation(void* addr, size_t size);
+    void idle_page_untrack_allocation(void* addr, size_t size);
 }
 
 } // namespace idle_page
