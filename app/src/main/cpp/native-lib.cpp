@@ -20,17 +20,26 @@
 using namespace std;
 
 // ==================== 内存页常量 ====================
-constexpr size_t PAGE_SIZE = 4096;
-constexpr size_t PAGE_MASK = ~(PAGE_SIZE - 1);
+constexpr size_t kPageSize = 4096;
+constexpr size_t kPageMask = ~(kPageSize - 1);
 
 // 对齐到4KB边界
 inline size_t alignToPage(size_t size) {
-    return (size + PAGE_SIZE - 1) & PAGE_MASK;
+    return (size + kPageSize - 1) & kPageMask;
+}
+
+// 对齐分配辅助函数（使用 posix_memalign）
+inline void* page_aligned_alloc(size_t size) {
+    void* ptr = nullptr;
+    if (posix_memalign(&ptr, kPageSize, size) != 0) {
+        return nullptr;
+    }
+    return ptr;
 }
 
 // 计算页数
 inline size_t pageCount(size_t size) {
-    return (size + PAGE_SIZE - 1) / PAGE_SIZE;
+    return (size + kPageSize - 1) / kPageSize;
 }
 
 // ==================== 内存热度级别 ====================
@@ -114,12 +123,12 @@ private:
     // 初始分配 10 个 64KB (16页) 缓冲区
     for (int i = 0; i < 10; i++) {
       size_t size = alignToPage(64 * 1024); // 64KB = 16页
-      void *p = aligned_alloc(PAGE_SIZE, size);
+      void *p = page_aligned_alloc(size);
       if (p) {
         // 初始化：写入每页的第一个字节
         volatile uint8_t *data = static_cast<volatile uint8_t*>(p);
         for (size_t page = 0; page < pageCount(size); page++) {
-          data[page * PAGE_SIZE] = 0xAA;
+          data[page * kPageSize] = 0xAA;
         }
         lock_guard<mutex> lock(hotMutex);
         hotMemory.emplace_back(p, size, MemHotness::L1_HOT);
@@ -136,7 +145,7 @@ private:
           volatile uint8_t *data = static_cast<volatile uint8_t*>(block.ptr);
           size_t pages = pageCount(block.size);
           for (size_t page = 0; page < pages; page++) {
-            data[page * PAGE_SIZE] = static_cast<uint8_t>(frame % 256);
+            data[page * kPageSize] = static_cast<uint8_t>(frame % 256);
           }
           block.accessCount++;
         }
@@ -145,12 +154,12 @@ private:
       // 每100帧扩容
       if (++frame % 100 == 0) {
         size_t newSize = alignToPage(32 * 1024); // 32KB = 8页
-        void *p = aligned_alloc(PAGE_SIZE, newSize);
+        void *p = page_aligned_alloc(newSize);
         if (p) {
           // 初始化每页
           volatile uint8_t *data = static_cast<volatile uint8_t*>(p);
           for (size_t page = 0; page < pageCount(newSize); page++) {
-            data[page * PAGE_SIZE] = 0xAA;
+            data[page * kPageSize] = 0xAA;
           }
           lock_guard<mutex> lock(hotMutex);
           hotMemory.emplace_back(p, newSize, MemHotness::L1_HOT);
@@ -177,13 +186,13 @@ private:
 
       for (int i = 0; i < allocCount; i++) {
         size_t pages = pageDist(gen);
-        size_t size = pages * PAGE_SIZE; // 4KB或8KB
-        void *p = aligned_alloc(PAGE_SIZE, size);
+        size_t size = pages * kPageSize; // 4KB或8KB
+        void *p = page_aligned_alloc(size);
         if (p) {
           // 初始化：写入每页的第一个字节
           volatile uint8_t *data = static_cast<volatile uint8_t*>(p);
           for (size_t pg = 0; pg < pages; pg++) {
-            data[pg * PAGE_SIZE] = 0xBB;
+            data[pg * kPageSize] = 0xBB;
           }
           activeObjects.emplace_back(p, size, MemHotness::L2_WARM);
         }
@@ -198,7 +207,7 @@ private:
           data[0] = static_cast<uint8_t>(use);
           // 如果对象有2页，偶尔访问第二页
           if (pages > 1 && (gen() % 4) == 0) {
-            data[PAGE_SIZE] = static_cast<uint8_t>(use);
+            data[kPageSize] = static_cast<uint8_t>(use);
           }
           obj.accessCount++;
         }
@@ -231,12 +240,12 @@ private:
       // 分配 2 个缓存块
       for (int i = 0; i < 2; i++) {
         size_t pages = pageDist(gen);
-        size_t size = pages * PAGE_SIZE;
-        void *p = aligned_alloc(PAGE_SIZE, size);
+        size_t size = pages * kPageSize;
+        void *p = page_aligned_alloc(size);
         if (p) {
           // 初始化：填充配置数据（每页前1KB）
           for (size_t pg = 0; pg < pages; pg++) {
-            memset(static_cast<char*>(p) + pg * PAGE_SIZE, 'C', 1024);
+            memset(static_cast<char*>(p) + pg * kPageSize, 'C', 1024);
           }
           configCaches.emplace_back(p, size, MemHotness::L3_COOL);
           LOGI("[L3-COOL] Allocated %zuKB(%zupages)", size / 1024, pages);
@@ -257,7 +266,7 @@ private:
           int pagesToAccess = min((size_t)pageAccessDist(gen), pages);
           for (int p = 0; p < pagesToAccess; p++) {
             size_t pageIdx = gen() % pages;
-            data[pageIdx * PAGE_SIZE]++; // 访问页首字节
+            data[pageIdx * kPageSize]++; // 访问页首字节
           }
           cache.accessCount++;
           LOGI("[L3-COOL] Queried %d/%zu pages", pagesToAccess, pages);
@@ -289,7 +298,7 @@ private:
     while (running) {
       // 映射 3 个 4MB (1024页) 资源包
       for (int i = 0; i < 3; i++) {
-        size_t size = 1024 * PAGE_SIZE; // 4MB，已经是页对齐
+        size_t size = 1024 * kPageSize; // 4MB，已经是页对齐
         void *p = mmap(nullptr, size, PROT_READ | PROT_WRITE,
                        MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
         if (p != MAP_FAILED) {
