@@ -381,9 +381,9 @@ bool ProcMapsParser::find_so_regions(const char* so_name,
     bool found_any = false;
     while (fgets(line, sizeof(line), fp)) {
         // 调试：打印所有包含 "demo" 的行
-        if (strstr(line, "demo") || strstr(line, "libdemo")) {
-            IDLE_LOGI("[IdlePage] Maps line: %s", line);
-        }
+//        if (strstr(line, "demo") || strstr(line, "libdemo")) {
+//            IDLE_LOGI("[IdlePage] Maps line: %s", line);
+//        }
         // 检查是否包含目标 so 名称
         if (strstr(line, so_name)) {
             IDLE_LOGI("[IdlePage] Matched so_name '%s' in line: %s", so_name, line);

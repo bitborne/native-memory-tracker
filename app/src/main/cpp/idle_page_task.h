@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <atomic>
 #include <cstddef>
+#include <mutex>
 
 namespace idle_page {
 
@@ -42,16 +43,17 @@ public:
 
     TaskQueue();
 
-    // 生产者调用（定时器线程）
+    // 生产者调用（定时器线程 + 任意调用malloc的线程）- 多生产者，需加锁
     bool enqueue(const SampleTask& task);
 
-    // 消费者调用（工作线程）
+    // 消费者调用（工作线程）- 单消费者，无锁
     bool dequeue(SampleTask& task);
 
     // 非阻塞检查
     bool empty() const;
 
 private:
+    mutable std::mutex mutex_;                      // 保护多生产者入队
     alignas(64) std::atomic<size_t> head_{0};  // 生产者写入位置
     alignas(64) std::atomic<size_t> tail_{0};  // 消费者读取位置
     SampleTask buffer_[CAPACITY];

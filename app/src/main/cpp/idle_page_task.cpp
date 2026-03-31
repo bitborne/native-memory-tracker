@@ -10,6 +10,8 @@ namespace idle_page {
 TaskQueue::TaskQueue() = default;
 
 bool TaskQueue::enqueue(const SampleTask& task) {
+    std::lock_guard<std::mutex> lock(mutex_);
+
     const size_t current_head = head_.load(std::memory_order_relaxed);
     const size_t next_head = (current_head + 1) % CAPACITY;
 
@@ -37,6 +39,7 @@ bool TaskQueue::dequeue(SampleTask& task) {
 }
 
 bool TaskQueue::empty() const {
+    std::lock_guard<std::mutex> lock(mutex_);
     return head_.load(std::memory_order_acquire) ==
            tail_.load(std::memory_order_acquire);
 }

@@ -302,14 +302,15 @@ bool IdlePageMonitor::init_page_cache_for_region(const MemoryRegion& region) {
 }
 
 void IdlePageMonitor::do_sample_start_all() {
+    // 拷贝区域列表，减少锁持有时间
+    std::vector<MemoryRegion> regions_copy;
+    {
+        std::lock_guard<std::mutex> lock(regions_mutex_);
+        regions_copy = target_regions_;
+    }
+
     // 为每个区域设置 idle 状态
-    // 注意：我们需要为每个区域单独处理，但 page_idle 操作是针对 PFN 的
-    // 优化：收集所有 PFN，批量设置 idle
-
-    std::vector<uint64_t> all_pfns;
-    all_pfns.reserve(1024);
-
-    for (const auto& region : target_regions_) {
+    for (const auto& region : regions_copy) {
         // 临时收集该区域的 PFN
         std::vector<uint64_t> region_pfns;
         for (uintptr_t addr = region.start; addr < region.end; addr += 4096) {
@@ -335,8 +336,15 @@ void IdlePageMonitor::do_sample_end_all() {
     size_t total_pages = 0;
     size_t total_accessed = 0;
 
+    // 拷贝区域列表，减少锁持有时间
+    std::vector<MemoryRegion> regions_copy;
+    {
+        std::lock_guard<std::mutex> lock(regions_mutex_);
+        regions_copy = target_regions_;
+    }
+
     // 分别处理每个区域
-    for (const auto& region : target_regions_) {
+    for (const auto& region : regions_copy) {
         size_t region_pages = 0;
         size_t region_accessed = 0;
 
@@ -450,6 +458,7 @@ uint64_t IdlePageMonitor::get_timestamp_us() {
 }
 
 const char* IdlePageMonitor::lookup_permission(uintptr_t vaddr) const {
+    std::lock_guard<std::mutex> lock(regions_mutex_);
     for (const auto& region : target_regions_) {
         if (vaddr >= region.start && vaddr < region.end) {
             return region.perms;
@@ -478,9 +487,12 @@ void IdlePageMonitor::track_allocation(uintptr_t addr, size_t size, uint32_t fla
     // 向上对齐到 4KB 边界
     uintptr_t page_end = (addr + size + 4095) & ~0xFFFULL;
 
-    // 如果区域已存在，跳过
-    if (region_exists(page_start, page_end)) {
-        return;
+    // 如果区域已存在，跳过（加锁检查）
+    {
+        std::lock_guard<std::mutex> lock(regions_mutex_);
+        if (region_exists(page_start, page_end)) {
+            return;
+        }
     }
 
     SampleTask task;
@@ -508,7 +520,9 @@ void IdlePageMonitor::untrack_allocation(uintptr_t addr, size_t size) {
 void IdlePageMonitor::handle_add_region(uintptr_t start, uintptr_t end, uint32_t flags) {
     (void)flags;  // 保留用于未来扩展
 
-    // 再次检查（双检锁模式，虽然这里不是锁）
+    std::lock_guard<std::mutex> lock(regions_mutex_);
+
+    // 再次检查（双检锁模式）
     if (region_exists(start, end)) {
         return;
     }

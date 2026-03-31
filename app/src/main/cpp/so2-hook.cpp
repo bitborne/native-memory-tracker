@@ -92,7 +92,7 @@ Java_com_example_demo_1so_MainActivity_nativeInitHook(JNIEnv* env, jobject thiz,
     // 模式选择：
     //   0 = SO_CODE_SECTIONS (监控SO代码段，日志显示权限+文件名)
     //   1 = HEAP_ALLOCATIONS (监控堆内存，日志显示(heap))
-    auto mode = idle_page::IdlePageMonitor::MonitorMode::SO_CODE_SECTIONS;
+    auto mode = idle_page::IdlePageMonitor::MonitorMode::HEAP_ALLOCATIONS;
     if (idle_page::IdlePageMonitor::instance().init(mode, "libdemo_so.so", visit_log_path, 100)) {
         LOGI("IdlePageMonitor initialized: %s", visit_log_path);
     } else {

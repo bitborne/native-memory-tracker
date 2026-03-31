@@ -15,6 +15,7 @@
 #include <thread>
 #include <atomic>
 #include <string>
+#include <mutex>
 
 namespace idle_page {
 
@@ -115,6 +116,7 @@ private:
 
     // ===== 运行时区域缓存 =====
     std::vector<MemoryRegion> target_regions_;
+    mutable std::mutex regions_mutex_;  // 保护 target_regions_
 
     // ===== 配置 =====
     MonitorMode mode_;
