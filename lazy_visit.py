@@ -117,23 +117,37 @@ class PageVisit:
 class ElfSymbolResolver:
     def __init__(self, elf_path: str):
         self.symbols = []
+        self.load_base = 0  # 加载基址
         self.load_symbols(elf_path)
 
     def load_symbols(self, elf_path: str):
         try:
             with open(elf_path, 'rb') as f:
                 elffile = ELFFile(f)
-                for section_name in ['.symtab', '.dynsym']:
+
+                # 计算加载基址（第一个 PT_LOAD 段的虚拟地址）
+                for segment in elffile.iter_segments():
+                    if segment['p_type'] == 'PT_LOAD':
+                        self.load_base = segment['p_vaddr']
+                        break
+
+                # 加载符号表
+                for section_name in ['.dynsym', '.symtab']:
                     section = elffile.get_section_by_name(section_name)
                     if section:
                         for symbol in section.iter_symbols():
-                            if symbol['st_value'] != 0:
+                            if symbol['st_value'] != 0 and symbol['st_size'] > 0:
                                 self.symbols.append({
                                     'name': symbol.name,
-                                    'addr': symbol['st_value'],
+                                    'addr': symbol['st_value'],  # 相对地址
                                     'size': symbol['st_size']
                                 })
+                        if self.symbols:  # 优先使用第一个找到的符号表
+                            break
+
                 self.symbols.sort(key=lambda x: x['addr'])
+                st.info(f"加载了 {len(self.symbols)} 个符号，基址: 0x{self.load_base:x}")
+
         except Exception as e:
             st.warning(f"加载ELF符号表失败: {e}")
 
@@ -141,17 +155,25 @@ class ElfSymbolResolver:
         if not self.symbols:
             return f"0x{addr:x}"
 
+        # 将绝对地址转换为相对地址
+        # 注意：如果 addr 小于 load_base，可能已经是相对地址
+        if addr >= self.load_base:
+            rel_addr = addr - self.load_base
+        else:
+            rel_addr = addr
+
+        # 二分查找符号
         left, right = 0, len(self.symbols)
         while left < right:
             mid = (left + right) // 2
-            if self.symbols[mid]['addr'] <= addr:
+            if self.symbols[mid]['addr'] <= rel_addr:
                 left = mid + 1
             else:
                 right = mid
 
         if left > 0:
             sym = self.symbols[left - 1]
-            offset = addr - sym['addr']
+            offset = rel_addr - sym['addr']
             if offset < sym['size'] or sym['size'] == 0:
                 return f"{sym['name']}+0x{offset:x}" if offset else sym['name']
 
