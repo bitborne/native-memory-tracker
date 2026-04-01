@@ -115,9 +115,9 @@ class PageVisit:
     region_name: str = ""
 
 class ElfSymbolResolver:
-    def __init__(self, elf_path: str):
+    def __init__(self, elf_path: str, runtime_base: int = 0):
         self.symbols = []
-        self.load_base = 0  # 加载基址
+        self.load_base = runtime_base  # 使用运行时基址（从日志解析）
         self.load_symbols(elf_path)
 
     def load_symbols(self, elf_path: str):
@@ -125,11 +125,12 @@ class ElfSymbolResolver:
             with open(elf_path, 'rb') as f:
                 elffile = ELFFile(f)
 
-                # 计算加载基址（第一个 PT_LOAD 段的虚拟地址）
-                for segment in elffile.iter_segments():
-                    if segment['p_type'] == 'PT_LOAD':
-                        self.load_base = segment['p_vaddr']
-                        break
+                # 如果未提供运行时基址，从ELF文件推断
+                if self.load_base == 0:
+                    for segment in elffile.iter_segments():
+                        if segment['p_type'] == 'PT_LOAD':
+                            self.load_base = segment['p_vaddr']
+                            break
 
                 # 加载符号表
                 for section_name in ['.dynsym', '.symtab']:
@@ -146,7 +147,7 @@ class ElfSymbolResolver:
                             break
 
                 self.symbols.sort(key=lambda x: x['addr'])
-                st.info(f"加载了 {len(self.symbols)} 个符号，基址: 0x{self.load_base:x}")
+                st.info(f"加载了 {len(self.symbols)} 个符号，运行时基址: 0x{self.load_base:x}")
 
         except Exception as e:
             st.warning(f"加载ELF符号表失败: {e}")
@@ -186,6 +187,7 @@ class MemRegParser:
 
     def __init__(self, log_path: str):
         self.blocks: Dict[int, MemBlock] = {}
+        self.so_base: int = 0  # SO 运行时加载基址
         self.parse(log_path)
 
     def parse(self, log_path: str):
@@ -194,7 +196,32 @@ class MemRegParser:
         with open(log_path, 'r') as f:
             for line in f:
                 line = line.strip()
-                if not line or line.startswith('#'):
+                if not line:
+                    continue
+
+                # 解析 SO 基址注释
+                if line.startswith('# SO_BASE_ADDRESS:'):
+                    try:
+                        parts = line.split('=')
+                        if len(parts) == 2:
+                            self.so_base = int(parts[1].strip(), 16)
+                            st.info(f"从日志解析到 SO 基址: 0x{self.so_base:x}")
+                    except Exception as e:
+                        st.warning(f"解析 SO 基址失败: {e}")
+                    continue
+
+                # 解析结构化元数据（时间戳=0 的行）
+                if line.startswith('0,0,'):
+                    try:
+                        parts = line.split(',')
+                        if len(parts) >= 9 and parts[8] == 'SO_BASE':
+                            self.so_base = int(parts[2], 16)
+                            st.info(f"从元数据解析到 SO 基址: 0x{self.so_base:x}")
+                    except Exception as e:
+                        st.warning(f"解析 SO 基址元数据失败: {e}")
+                    continue
+
+                if line.startswith('#'):
                     continue
 
                 try:
@@ -203,6 +230,10 @@ class MemRegParser:
                         continue
 
                     timestamp = int(parts[0])
+                    # 跳过元数据行（时间戳为0）
+                    if timestamp == 0:
+                        continue
+
                     alloc_type = int(parts[1])
                     addr = int(parts[2], 16) if parts[2].startswith('0x') else int(parts[2])
                     req_size = int(parts[3])
@@ -401,7 +432,7 @@ def create_heatmap_figure(display_blocks, sample_sequences, access_matrix, seq_t
 
     fig.update_layout(
         height=final_height,
-        margin=dict(l=150, r=50, t=30, b=50),
+        margin=dict(l=120, r=30, t=30, b=50),  # 减小左边距
         xaxis=dict(
             title="采样周期",
             tickmode='array',
@@ -409,9 +440,11 @@ def create_heatmap_figure(display_blocks, sample_sequences, access_matrix, seq_t
             ticktext=[x_labels[i] for i in range(0, len(sample_sequences), max(1, len(sample_sequences)//10))]
         ),
         yaxis=dict(
-            title="内存页地址 (4KB)",
+            title="内存页 (4KB)",
             type='category',
-            tickmode='linear'
+            tickmode='linear',
+            tickfont=dict(size=10),  # 减小字体
+            dtick=1,  # 每行都显示标签
         ),
         title=dict(
             text="内存页访问热力图",
@@ -464,16 +497,17 @@ def main():
     # ========== 分析逻辑 ==========
     if analyze_btn:
         with st.spinner("分析中..."):
-            if so_file:
-                with open("/tmp/temp.so", "wb") as f:
-                    f.write(so_file.getvalue())
-                resolver = ElfSymbolResolver("/tmp/temp.so")
-            else:
-                resolver = None
-
             with open("/tmp/mem_reg.log", "wb") as f:
                 f.write(reg_file.getvalue())
             reg_parser = MemRegParser("/tmp/mem_reg.log")
+
+            # 传入运行时基址来解析符号
+            if so_file:
+                with open("/tmp/temp.so", "wb") as f:
+                    f.write(so_file.getvalue())
+                resolver = ElfSymbolResolver("/tmp/temp.so", runtime_base=reg_parser.so_base)
+            else:
+                resolver = None
 
             with open("/tmp/mem_visit.log", "wb") as f:
                 f.write(visit_file.getvalue())
@@ -688,10 +722,10 @@ def main():
     filtered_addrs = filtered_df['Block_Addr'].tolist() if not filtered_df.empty else []
     filtered_blocks = [reg_parser.blocks.get(addr) for addr in filtered_addrs if addr in reg_parser.blocks]
 
-    # ========== 主布局：左侧热力图 + 右侧详情 ==========
+    # ========== 主布局：左侧热力图 + 右侧列表和详情 ==========
     st.markdown("---")
 
-    main_col1, main_col2 = st.columns([3, 1])
+    main_col1, main_col2 = st.columns([1, 1])  # 5:5 比例
 
     with main_col1:
         # 热力图区域（固定高度，可滚动）
@@ -699,39 +733,62 @@ def main():
         st.caption("说明: 每行=4KB页，每列=采样周期。绿=已访问，灰=空闲，红=已释放，白=无数据")
 
         # 使用 container 控制高度
-        heatmap_container = st.container(height=500, border=True)
+        heatmap_container = st.container(height=600, border=True)
 
         with heatmap_container:
             if filtered_blocks:
-                display_blocks = filtered_blocks[:30] if len(filtered_blocks) > 30 else filtered_blocks
+                display_blocks = filtered_blocks[:50] if len(filtered_blocks) > 50 else filtered_blocks
 
                 fig = create_heatmap_figure(
                     display_blocks,
                     sample_sequences,
                     access_matrix,
                     seq_time_map,
-                    max_height=1200  # 允许内部滚动
+                    max_height=1500  # 允许内部滚动
                 )
 
                 if fig:
-                    # 使用 use_container_width=False 保持比例
-                    st.plotly_chart(fig, use_container_width=False, config={'responsive': True})
+                    # 使用 use_container_width=True 填充容器
+                    st.plotly_chart(fig, use_container_width=True, config={'responsive': True})
                 else:
                     st.info("无数据可显示")
             else:
                 st.info("请选择筛选条件以显示热力图")
 
     with main_col2:
-        # 右侧详情面板
-        st.markdown("#### 内存块详情")
+        # 右侧：内存块列表 + 详情
+        st.markdown("#### 内存块列表")
 
         if not filtered_df.empty:
+            # 显示简化的列表
+            list_df = filtered_df[['Address', 'Size', 'Page Rate', 'Category']].copy()
+            list_df.columns = ['地址', '大小', '访问率', '分类']
+
+            # 使用 st.dataframe 替代 st.data_editor 以获得更好的性能
+            st.dataframe(
+                list_df,
+                height=250,
+                use_container_width=True,
+                column_config={
+                    "地址": st.column_config.TextColumn(width="small"),
+                    "大小": st.column_config.TextColumn(width="small"),
+                    "访问率": st.column_config.TextColumn(width="small"),
+                    "分类": st.column_config.TextColumn(width="medium"),
+                }
+            )
+
+            st.divider()
+
+            # 内存块详情
+            st.markdown("#### 选中块详情")
+
             # 选择器
             block_options = [f"0x{b.addr:x} ({format_size(b.size)})" for b in filtered_blocks if b]
             selected_block_str = st.selectbox(
-                "选择块",
+                "选择",
                 block_options,
-                key="block_select"
+                key="block_select",
+                label_visibility="collapsed"
             )
 
             if selected_block_str:
@@ -739,38 +796,23 @@ def main():
                 block = reg_parser.blocks.get(addr)
 
                 if block:
-                    # 详情卡片
-                    st.markdown('<div class="detail-panel">', unsafe_allow_html=True)
+                    # 紧凑详情
+                    col_d1, col_d2 = st.columns(2)
+                    with col_d1:
+                        st.markdown(f"**地址**  `0x{block.addr:x}`")
+                        st.markdown(f"**大小**  {format_size(block.size)}")
+                        st.markdown(f"**类型**  {block.alloc_type}")
+                        status_color = "🔴" if block.is_freed else "🟢"
+                        st.markdown(f"**状态**  {status_color}")
 
-                    st.markdown(f"**地址**  `0x{block.addr:x}`")
-                    st.markdown(f"**大小**  {format_size(block.size)}")
-                    st.markdown(f"**类型**  {block.alloc_type}")
-
-                    status_color = "🔴" if block.is_freed else "🟢"
-                    st.markdown(f"**状态**  {status_color} {'已释放' if block.is_freed else '存活'}")
-
-                    st.divider()
-
-                    st.markdown(f"**访问周期**  {block.access_count}/{total_sequences}")
-                    st.markdown(f"**访问页面**  {block.accessed_pages}/{block.total_pages}")
-                    st.markdown(f"**页面访问率**  {block.page_access_rate*100:.1f}%")
-
-                    score = block.calc_cold_hot_score(total_sequences)
-                    score_emoji = "🔥" if score > 0.6 else "❄️" if score < 0.3 else "⚡"
-                    st.markdown(f"**冷热分数**  {score_emoji} {score:.2f}")
-
-                    st.divider()
-
-                    st.markdown(f"**分配时间**  {format_time(block.alloc_time - min_alloc_time)}")
-                    if block.last_access_time:
-                        st.markdown(f"**最后访问**  {format_time(block.last_access_time - min_alloc_time)}")
-                    if block.is_freed:
-                        st.markdown(f"**生命周期**  {format_time(block.lifetime_us)}")
-
-                    st.markdown('</div>', unsafe_allow_html=True)
+                    with col_d2:
+                        st.markdown(f"**访问**  {block.access_count}/{total_sequences}")
+                        st.markdown(f"**页面**  {block.accessed_pages}/{block.total_pages}")
+                        score = block.calc_cold_hot_score(total_sequences)
+                        st.markdown(f"**分数**  {score:.2f}")
 
                     # 调用栈（可折叠）
-                    with st.expander("📋 调用堆栈", expanded=True):
+                    with st.expander("📋 调用堆栈", expanded=False):
                         if block.callstack:
                             for i, pc in enumerate(block.callstack[:5]):
                                 symbol = ""
@@ -786,20 +828,6 @@ def main():
                             st.markdown("无调用堆栈")
         else:
             st.info("无匹配数据")
-
-    # ========== 底部：内存块列表 ==========
-    st.markdown("---")
-    st.markdown("### 内存块列表")
-
-    if not filtered_df.empty:
-        display_df = filtered_df[['Address', 'Size', 'Access Cycles',
-                                   'Accessed Pages', 'Page Rate', 'Cold/Hot Score',
-                                   'Alloc Time', 'Last Access', 'Category', 'Status']].copy()
-        display_df.columns = ['地址', '大小', '访问周期', '已访问页面', '页面访问率', '冷热分数',
-                               '创建时间', '最后访问', '分类', '状态']
-        st.dataframe(display_df, height=300, use_container_width=True)
-    else:
-        st.info("无匹配的内存块")
 
 if __name__ == "__main__":
     main()
