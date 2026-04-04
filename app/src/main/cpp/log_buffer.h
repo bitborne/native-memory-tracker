@@ -58,6 +58,9 @@ public:
     // 提交到全局队列（TLS 缓冲区满时调用）
     bool submit_to_global(const char* data, size_t len);
 
+    // 直接写入文件（用于元数据，如SO基址）
+    bool write_raw(const char* data, size_t len);
+
     static LogManager& instance();
 };
 

@@ -422,7 +422,12 @@ def create_heatmap_figure(display_blocks, sample_sequences, access_matrix, seq_t
             title="状态",
             tickvals=[0.5, 1.5, 2.5, 3.5],
             ticktext=["无数据", "空闲", "已访问", "已释放"],
-            len=0.5
+            len=0.5,
+            thickness=15,  # 减小厚度
+            x=-0.08,  # 移到左侧
+            xanchor='right',
+            y=0.5,
+            yanchor='middle'
         )
     ))
 
@@ -432,24 +437,28 @@ def create_heatmap_figure(display_blocks, sample_sequences, access_matrix, seq_t
 
     fig.update_layout(
         height=final_height,
-        margin=dict(l=120, r=30, t=30, b=50),  # 减小左边距
+        width=1600,  # 大幅增加图表宽度
+        margin=dict(l=120, r=10, t=30, b=50),  # 大幅减小右边距
         xaxis=dict(
             title="采样周期",
             tickmode='array',
             tickvals=list(range(len(sample_sequences)))[::max(1, len(sample_sequences)//10)],
-            ticktext=[x_labels[i] for i in range(0, len(sample_sequences), max(1, len(sample_sequences)//10))]
+            ticktext=[x_labels[i] for i in range(0, len(sample_sequences), max(1, len(sample_sequences)//10))],
+            automargin=True
         ),
         yaxis=dict(
             title="内存页 (4KB)",
             type='category',
             tickmode='linear',
-            tickfont=dict(size=10),  # 减小字体
-            dtick=1,  # 每行都显示标签
+            tickfont=dict(size=10),
+            dtick=5,  # 每5行显示一个标签，避免拥挤
+            automargin=True
         ),
         title=dict(
             text="内存页访问热力图",
             font=dict(size=14)
-        )
+        ),
+        autosize=False  # 禁用自动调整大小
     )
 
     return fig
@@ -485,7 +494,7 @@ def main():
 
     with menu_cols[3]:
         st.markdown("<br>", unsafe_allow_html=True)
-        analyze_btn = st.button("分析", type="primary", disabled=not (reg_file and visit_file), use_container_width=True)
+        analyze_btn = st.button("分析", type="primary", disabled=not (reg_file and visit_file), width='stretch')
 
     st.markdown('</div>', unsafe_allow_html=True)
 
@@ -707,7 +716,7 @@ def main():
 
     with filter_cols[2]:
         # 刷新按钮（重新渲染）
-        if st.button("刷新视图", use_container_width=True):
+        if st.button("刷新视图", width='stretch'):
             st.rerun()
 
     # 应用筛选
@@ -722,70 +731,81 @@ def main():
     filtered_addrs = filtered_df['Block_Addr'].tolist() if not filtered_df.empty else []
     filtered_blocks = [reg_parser.blocks.get(addr) for addr in filtered_addrs if addr in reg_parser.blocks]
 
-    # ========== 主布局：左侧热力图 + 右侧列表和详情 ==========
+    # ========== 第一行：热力图（全宽）==========
     st.markdown("---")
 
-    main_col1, main_col2 = st.columns([1, 1])  # 5:5 比例
+    st.markdown("#### 内存页访问热力图")
+    st.caption("说明: 每行=4KB页，每列=采样周期。绿=已访问，灰=空闲，红=已释放，白=无数据")
 
-    with main_col1:
-        # 热力图区域（固定高度，可滚动）
-        st.markdown("#### 内存页访问热力图")
-        st.caption("说明: 每行=4KB页，每列=采样周期。绿=已访问，灰=空闲，红=已释放，白=无数据")
+    # 使用 container 控制高度
+    heatmap_container = st.container(height=600, border=True)
 
-        # 使用 container 控制高度
-        heatmap_container = st.container(height=600, border=True)
+    with heatmap_container:
+        if filtered_blocks:
+            display_blocks = filtered_blocks[:50] if len(filtered_blocks) > 50 else filtered_blocks
 
-        with heatmap_container:
-            if filtered_blocks:
-                display_blocks = filtered_blocks[:50] if len(filtered_blocks) > 50 else filtered_blocks
+            fig = create_heatmap_figure(
+                display_blocks,
+                sample_sequences,
+                access_matrix,
+                seq_time_map,
+                max_height=1500  # 允许内部滚动
+            )
 
-                fig = create_heatmap_figure(
-                    display_blocks,
-                    sample_sequences,
-                    access_matrix,
-                    seq_time_map,
-                    max_height=1500  # 允许内部滚动
-                )
-
-                if fig:
-                    # 使用 use_container_width=True 填充容器
-                    st.plotly_chart(fig, use_container_width=True, config={'responsive': True})
-                else:
-                    st.info("无数据可显示")
+            if fig:
+                # 使用 width='stretch' 填充容器
+                st.plotly_chart(fig, width='stretch', config={'responsive': True})
             else:
-                st.info("请选择筛选条件以显示热力图")
+                st.info("无数据可显示")
+        else:
+            st.info("请选择筛选条件以显示热力图")
 
-    with main_col2:
-        # 右侧：内存块列表 + 详情
+    # ========== 第二行：内存块列表(7) + 详情(3) ==========
+    st.markdown("---")
+
+    list_col, detail_col = st.columns([7, 3])
+
+    with list_col:
         st.markdown("#### 内存块列表")
 
         if not filtered_df.empty:
-            # 显示简化的列表
-            list_df = filtered_df[['Address', 'Size', 'Page Rate', 'Category']].copy()
-            list_df.columns = ['地址', '大小', '访问率', '分类']
+            # 显示全面的列表信息
+            list_df = filtered_df[['Address', 'Size', 'Access Cycles', 'Accessed Pages',
+                                    'Page Rate', 'Cold/Hot Score', 'Alloc Time',
+                                    'Last Access', 'Category', 'Status']].copy()
+            list_df.columns = ['地址', '大小', '访问周期', '已访问页面',
+                               '页面访问率', '冷热分数', '创建时间',
+                               '最后访问', '分类', '状态']
 
-            # 使用 st.dataframe 替代 st.data_editor 以获得更好的性能
+            # 使用 st.dataframe 显示全面信息
             st.dataframe(
                 list_df,
-                height=250,
-                use_container_width=True,
+                height=400,
+                width='stretch',
                 column_config={
                     "地址": st.column_config.TextColumn(width="small"),
                     "大小": st.column_config.TextColumn(width="small"),
-                    "访问率": st.column_config.TextColumn(width="small"),
+                    "访问周期": st.column_config.NumberColumn(width="small"),
+                    "已访问页面": st.column_config.TextColumn(width="small"),
+                    "页面访问率": st.column_config.TextColumn(width="small"),
+                    "冷热分数": st.column_config.TextColumn(width="small"),
+                    "创建时间": st.column_config.TextColumn(width="small"),
+                    "最后访问": st.column_config.TextColumn(width="small"),
                     "分类": st.column_config.TextColumn(width="medium"),
+                    "状态": st.column_config.TextColumn(width="small"),
                 }
             )
+        else:
+            st.info("无匹配数据")
 
-            st.divider()
+    with detail_col:
+        st.markdown("#### 内存块详情")
 
-            # 内存块详情
-            st.markdown("#### 选中块详情")
-
+        if not filtered_df.empty:
             # 选择器
             block_options = [f"0x{b.addr:x} ({format_size(b.size)})" for b in filtered_blocks if b]
             selected_block_str = st.selectbox(
-                "选择",
+                "选择内存块",
                 block_options,
                 key="block_select",
                 label_visibility="collapsed"
@@ -796,23 +816,8 @@ def main():
                 block = reg_parser.blocks.get(addr)
 
                 if block:
-                    # 紧凑详情
-                    col_d1, col_d2 = st.columns(2)
-                    with col_d1:
-                        st.markdown(f"**地址**  `0x{block.addr:x}`")
-                        st.markdown(f"**大小**  {format_size(block.size)}")
-                        st.markdown(f"**类型**  {block.alloc_type}")
-                        status_color = "🔴" if block.is_freed else "🟢"
-                        st.markdown(f"**状态**  {status_color}")
-
-                    with col_d2:
-                        st.markdown(f"**访问**  {block.access_count}/{total_sequences}")
-                        st.markdown(f"**页面**  {block.accessed_pages}/{block.total_pages}")
-                        score = block.calc_cold_hot_score(total_sequences)
-                        st.markdown(f"**分数**  {score:.2f}")
-
-                    # 调用栈（可折叠）
-                    with st.expander("📋 调用堆栈", expanded=False):
+                    # 1. 调用堆栈（最重点，置顶，默认展开）
+                    with st.expander("调用堆栈", expanded=True):
                         if block.callstack:
                             for i, pc in enumerate(block.callstack[:5]):
                                 symbol = ""
@@ -826,6 +831,36 @@ def main():
                                     st.markdown(f"`#{i}` `0x{pc:016x}`")
                         else:
                             st.markdown("无调用堆栈")
+
+                    st.divider()
+
+                    # 2. 基本信息（紧凑格式）
+                    score = block.calc_cold_hot_score(total_sequences)
+                    score_label = "[热]" if score > 0.6 else "[冷]" if score < 0.3 else "[中]"
+                    status_label = "[已释放]" if block.is_freed else "[存活]"
+
+                    # 一行显示多个信息
+                    c1, c2, c3 = st.columns(3)
+                    with c1:
+                        st.markdown(f"**地址**  `0x{block.addr:x}`")
+                        st.markdown(f"**大小**  {format_size(block.size)}")
+                    with c2:
+                        st.markdown(f"**类型**  {block.alloc_type}")
+                        st.markdown(f"**状态**  {status_label}")
+                    with c3:
+                        st.markdown(f"**访问**  {block.access_count}/{total_sequences}")
+                        st.markdown(f"**页面**  {block.accessed_pages}/{block.total_pages}")
+
+                    # 时间信息一行显示
+                    time_str = f"**分配** {format_time(block.alloc_time - min_alloc_time)}"
+                    if block.last_access_time:
+                        time_str += f" | **最后** {format_time(block.last_access_time - min_alloc_time)}"
+                    if block.is_freed:
+                        time_str += f" | **生命** {format_time(block.lifetime_us)}"
+                    st.markdown(time_str)
+
+                    # 分数和访问率
+                    st.markdown(f"**冷热分数:** {score_label} {score:.2f} | **页面访问率:** {block.page_access_rate*100:.1f}%")
         else:
             st.info("无匹配数据")
 

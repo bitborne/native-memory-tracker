@@ -170,6 +170,12 @@ bool LogManager::submit_to_global(const char *data, size_t len) {
     return ring_buffer.try_enqueue(data, len);
 }
 
+bool LogManager::write_raw(const char *data, size_t len) {
+    if (fd < 0) return false;
+    ssize_t written = write(fd, data, len);
+    return written == (ssize_t)len;
+}
+
 LogManager& LogManager::instance() {
     static LogManager inst;
     return inst;

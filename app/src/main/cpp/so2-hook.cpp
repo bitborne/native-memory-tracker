@@ -9,11 +9,54 @@
 #include <cstdarg>
 #include <chrono>
 #include <dlfcn.h>
+#include <link.h>       // for dl_iterate_phdr
 #include <unwind.h>
 #include <malloc.h>    // for malloc_usable_size()
 
 // 日志文件 FD
 static int g_log_fd = -1;
+
+// SO加载基址（用于符号解析）
+static uintptr_t g_so_base_addr = 0;
+
+// 回调函数：用于dl_iterate_phdr查找SO基址
+static int find_so_base_callback(struct dl_phdr_info *info, size_t size, void *data) {
+    (void)size;
+    const char* target_so = static_cast<const char*>(data);
+
+    if (info->dlpi_name && strstr(info->dlpi_name, target_so)) {
+        g_so_base_addr = info->dlpi_addr;
+        LOGI("Found %s base address: 0x%llx", info->dlpi_name, (unsigned long long)g_so_base_addr);
+        return 1; // 找到后停止遍历
+    }
+    return 0; // 继续遍历
+}
+
+// 获取并记录SO基址到日志文件
+static void log_so_base_address(const char* so_name) {
+    // 遍历所有加载的共享库
+    dl_iterate_phdr(find_so_base_callback, (void*)so_name);
+
+    // 将基址写入日志文件头部作为注释
+    if (g_so_base_addr != 0) {
+        char header[256];
+        snprintf(header, sizeof(header),
+                 "# SO_BASE_ADDRESS: %s=0x%llx\n",
+                 so_name, (unsigned long long)g_so_base_addr);
+        LogManager::instance().write_raw(header, strlen(header));
+
+        // 同时写入一个结构化的记录（时间戳=0表示元数据）
+        char meta[512];
+        snprintf(meta, sizeof(meta),
+                 "0,0,0x%llx,0,0,0,0,0,SO_BASE,%s\n",
+                 (unsigned long long)g_so_base_addr, so_name);
+        LogManager::instance().write_raw(meta, strlen(meta));
+
+        LOGI("SO base address logged: 0x%llx", (unsigned long long)g_so_base_addr);
+    } else {
+        LOGI("SO base address not found for: %s", so_name);
+    }
+}
 
 // Hook stubs，用于 unhook
 static bytehook_stub_t g_stub_malloc = nullptr;
@@ -45,7 +88,8 @@ Java_com_example_demo_1so_MainActivity_nativeInitHook(JNIEnv* env, jobject thiz,
     LOGI("SO2: LogManager initialized");
 
     // 打开日志文件（追加模式）- 保留用于 write_log
-    g_log_fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0666);
+    // 注意：不使用 O_TRUNC，因为 LogManager::init 已经清空了文件
+    g_log_fd = open(path, O_WRONLY | O_CREAT | O_APPEND, 0666);
     if (g_log_fd < 0) {
         LOGE("Failed to open log file: %s! errno = %d", path, errno);
         env->ReleaseStringUTFChars(log_path, path);
@@ -74,6 +118,9 @@ Java_com_example_demo_1so_MainActivity_nativeInitHook(JNIEnv* env, jobject thiz,
 
     LOGI("SO2 Hook initialized, logging to: %s", path);
     g_hooked = true;
+
+    // 记录SO加载基址（用于后续符号解析）
+    log_so_base_address(target_so);
 
     // 初始化 Idle Page Monitor（内存访问监控）
     // mem_visit.log 路径与 mem_reg.log 同目录
