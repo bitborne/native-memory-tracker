@@ -67,13 +67,13 @@ This project demonstrates advanced Android native development techniques for mem
 | **Memory usage status** | Device Root + Kernel with IdlePage enabled | `mem_visit.log` |
 | **ELF file parsing** | Modular ELF Reader compatible with readelf | CLI tool `elf_reader` |
 
-![Monitoring Logs Display](https://disk.0voice.com/u/EQ)
+![Monitoring Logs Display](README.zh-CN.assets/EQ.png)
 
 ## Architecture
 
-![Memory Access Monitoring Architecture](https://disk.0voice.com/u/EP)
+![Memory Access Monitoring Architecture](README.zh-CN.assets/EP.png)
 
-![Memory Access Data Flow Diagram](https://disk.0voice.com/u/ER)
+![Memory Access Data Flow Diagram](README.zh-CN.assets/ER.png)
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
@@ -297,7 +297,7 @@ streamlit run lazy_visit.py
 - **Call Stack Resolution**: Supports ELF symbol resolution to restore allocation call chains
 - **Detailed Statistics Panel**: Runtime duration, scan rounds, block count, total memory usage
 
-![Combined logs visualization analysis interface](https://disk.0voice.com/u/En)
+![Combined logs visualization analysis interface](README.zh-CN.assets/En.png)
 
 ## Usage
 

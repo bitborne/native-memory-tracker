@@ -67,13 +67,13 @@
 | **内存使用状态** | 手机 Root + 编译 Kernel 打开 IdlePage | `mem_visit.log` |
 | **ELF 文件解析** | 模块化 ELF Reader 兼容 readelf | 命令行工具 `elf_reader` |
 
-![监控日志展示](https://disk.0voice.com/u/EQ)
+![监控日志展示](README.zh-CN.assets/EQ.png)
 
 ## 架构
 
-![内存访问监控架构图](https://disk.0voice.com/u/EP)
+![内存访问监控架构图](README.zh-CN.assets/EP.png)
 
-![内存访问监控数据流向图](https://disk.0voice.com/u/ER)
+![内存访问监控数据流向图](README.zh-CN.assets/ER.png)
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
@@ -298,7 +298,7 @@ streamlit run lazy_visit.py
 - **调用堆栈解析**：支持 ELF 符号解析，还原分配调用链
 - **详细统计面板**：运行时长、扫描轮次、内存块数、总内存占用
 
-![两份日志结合的可视化分析界面](https://disk.0voice.com/u/En)
+![两份日志结合的可视化分析界面](README.zh-CN.assets/En.png)
 
 ## 使用方法
 
