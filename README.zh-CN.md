@@ -18,6 +18,7 @@
     - [3. 无锁日志系统](#3-无锁日志系统)
     - [4. 空闲页面监控器](#4-空闲页面监控器)
     - [5. ELF 解析器库](#5-elf-解析器库)
+    - [6. 可视化分析工具 (lazy\_visit.py)](#6-可视化分析工具-lazy_visitpy)
   - [快速开始](#快速开始)
     - [前置要求](#前置要求)
     - [构建](#构建)
@@ -191,6 +192,31 @@ Hook 9 个内存分配函数，并捕获完整调用栈：
 | 段 | 程序头（加载段） |
 | DWARF | 调试行信息 |
 
+### 6. 可视化分析工具 (lazy_visit.py)
+
+基于 Streamlit 的 Web 工具，用于联合分析内存分配日志和访问日志：
+
+```bash
+# 安装依赖
+pip install streamlit pandas numpy plotly pyelftools
+
+# 启动可视化界面
+streamlit run lazy_visit.py
+```
+
+**功能特性**：
+
+| 功能 | 描述 |
+|------|------|
+| **内存热力图** | 展示每页内存在各采样周期的访问模式 |
+| **冷热分类** | 自动分类：从未访问、冷、温热、热、极热 |
+| **调用堆栈解析** | ELF 符号解析，定位内存分配来源 |
+| **统计面板** | 运行时长、扫描轮次、内存块数、总内存占用 |
+
+**使用方法**：上传 `mem_reg.log`、`mem_visit.log` 和 `libdemo_so.so` 进行交互式内存行为分析。
+
+![两份日志结合的可视化分析界面](README.zh-CN.assets/En.png)
+
 ## 快速开始
 
 ### 前置要求
@@ -282,23 +308,12 @@ adb pull /storage/emulated/0/Android/data/com.example.demo_so/files/mem_visit.lo
 
 ### 可视化分析
 
-使用 `lazy_visit.py` 工具对两份日志进行联合可视化分析：
+使用 `lazy_visit.py` 工具进行联合可视化分析：
 
 ```bash
-# 安装依赖
 pip install streamlit pandas numpy plotly pyelftools
-
-# 启动可视化界面
 streamlit run lazy_visit.py
 ```
-
-**功能特性**：
-- **内存页访问热力图**：直观展示每块内存的访问周期分布
-- **冷热内存分类**：自动识别 Never Accessed、Cold、Warm、Hot 等类别
-- **调用堆栈解析**：支持 ELF 符号解析，还原分配调用链
-- **详细统计面板**：运行时长、扫描轮次、内存块数、总内存占用
-
-![两份日志结合的可视化分析界面](README.zh-CN.assets/En.png)
 
 ## 使用方法
 

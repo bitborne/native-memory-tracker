@@ -18,6 +18,7 @@ A comprehensive Android native memory analysis project for learning low-level An
     - [3. Lock-Free Logging System](#3-lock-free-logging-system)
     - [4. Idle Page Monitor](#4-idle-page-monitor)
     - [5. ELF Reader Library](#5-elf-reader-library)
+    - [6. Visualization Tool (lazy\_visit.py)](#6-visualization-tool-lazy_visitpy)
   - [Quick Start](#quick-start)
     - [Prerequisites](#prerequisites)
     - [Build](#build)
@@ -190,6 +191,31 @@ Educational modular ELF parsing library compatible with GNU readelf:
 | Segments | Program header (load segments) |
 | DWARF | Debug line information |
 
+### 6. Visualization Tool (lazy_visit.py)
+
+A Streamlit-based web tool for joint analysis of memory allocation and access logs:
+
+```bash
+# Install dependencies
+pip install streamlit pandas numpy plotly pyelftools
+
+# Launch visualization interface
+streamlit run lazy_visit.py
+```
+
+**Features**:
+
+| Feature | Description |
+|---------|-------------|
+| **Memory Heatmap** | Visualize page-level access patterns across sampling cycles |
+| **Hot/Cold Classification** | Automatic categorization: Never Accessed, Cold, Warm, Hot, Burning Hot |
+| **Call Stack Resolution** | ELF symbol resolution to identify allocation sources |
+| **Statistics Dashboard** | Runtime duration, scan rounds, block count, total memory usage |
+
+**Usage**: Upload `mem_reg.log`, `mem_visit.log`, and `libdemo_so.so` to analyze memory behavior interactively.
+
+![Combined logs visualization analysis interface](README.zh-CN.assets/En.png)
+
 ## Quick Start
 
 ### Prerequisites
@@ -281,23 +307,12 @@ adb pull /storage/emulated/0/Android/data/com.example.demo_so/files/mem_visit.lo
 
 ### Visualization Analysis
 
-Use `lazy_visit.py` tool for joint visualization analysis of both log files:
+Use `lazy_visit.py` tool for joint visualization analysis:
 
 ```bash
-# Install dependencies
 pip install streamlit pandas numpy plotly pyelftools
-
-# Launch visualization interface
 streamlit run lazy_visit.py
 ```
-
-**Features**:
-- **Memory Page Access Heatmap**: Visualize access cycle distribution for each memory block
-- **Hot/Cold Memory Classification**: Automatically identifies Never Accessed, Cold, Warm, Hot categories
-- **Call Stack Resolution**: Supports ELF symbol resolution to restore allocation call chains
-- **Detailed Statistics Panel**: Runtime duration, scan rounds, block count, total memory usage
-
-![Combined logs visualization analysis interface](README.zh-CN.assets/En.png)
 
 ## Usage
 
